@@ -1,6 +1,6 @@
 # VeriDoc AI: document tampering localization (prototype)
 
-> Status: Phase 1 (synthetic dataset). No model or baseline results exist yet.
+> Status: Phase 2 (ELA baseline + evaluation harness). No model results exist yet.
 
 VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
 a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
@@ -69,11 +69,17 @@ every sample's metadata.
   median colour of a 4 px ring plus matching noise), then draw a new value at the same anchor.
   - **Easy:** different font family and/or a size change of at least 12%.
   - **Hard:** same family, size within ±1 px, plus a random non-empty subset of: sub-pixel or
-    1-2 px offset, ink colour shift, different anti-aliasing (supersampled or aliased
-    rendering), and letter spacing.
+    1-2 px offset, ink colour shift (4-10 grey levels), different anti-aliasing (supersampled or
+    aliased rendering), and letter spacing.
   - Easy/hard is assigned by seed, exactly 50/50 within each split × document type.
-- **Splice** (one per source): paste a rectangular patch (100-420 × 40-220 px, containing
-  ink) from a donor document of the **same split** and same document type at a random location.
+- **Splice** (one per source): paste a rectangular patch from a donor document of the **same
+  split** and same document type at a random location. Two size classes, 50/50 within each
+  split × document type (recorded as `splice_size_class`):
+  - **Block:** 100-420 × 40-220 px, containing ink.
+  - **Field:** 1-3 text lines starting at a donor text field.
+
+  The patch colour is shifted by the paper-colour difference (target − donor), plus a uniform
+  residual of ±2 grey levels per channel, so the donor's paper tint doesn't give the edit away.
 
 ### Masks: definition and limitation
 
@@ -94,6 +100,8 @@ still labelled positive.
 - All variants of a source stay in one split.
 - Splice donors come from the same split.
 - Training crops come only from the train split (the sampler refuses other splits).
+  - "Text-dense" crops are judged on text strokes: dark pixels minus solid fills found by a 9×9
+    morphological opening. Dark header bands therefore cannot make a crop text-dense on their own.
 - Val/test are evaluated on full pages.
 
 ### Fonts
@@ -134,12 +142,67 @@ If the hash differs, the check exits with an error that says to use (b).
 
 ### Known generator artifacts (synthetic-data limitations)
 
-- Splice patches keep the donor's paper tint and noise, so a patch pasted onto blank paper
-  shows as a faintly different rectangle. A model may learn this as a shortcut.
+- Splice patches are tint-matched only in mean colour. The donor's noise level and JPEG
+  history still differ, which is intended forensic signal.
+- Every splice patch meets an ink floor (blocks ≥ 0.05, fields ≥ 0.03 dark-pixel fraction), so no
+  patch is near-blank paper. Sparse patches near the floor can still be subtle, and the whole
+  rectangle is labelled positive.
 - Edited values are not kept arithmetically consistent: totals no longer add up after an edit.
   The model only sees pixels, so this is not a usable cue, but it is unrealistic.
 - Only two document types and a few layouts per type. Paper is uniform colour plus Gaussian
   noise, with no scanner or photo effects beyond resize, blur and JPEG.
 
-See `docs/FONTS.md` for fonts and licenses. Sections on the baseline, model, results,
+## Baseline and evaluation harness (Phase 2)
+
+```bash
+# ELA on validation: selects + freezes thresholds -> results/val_ela.json, results/frozen_ela.json
+.venv/bin/python -m research.evaluate --method ela --split val
+# test splits are refused unless a validation-frozen config is given (Phase 4)
+.venv/bin/python -m research.evaluate --method ela --split test --frozen-config results/frozen_ela.json
+```
+
+**ELA anomaly score map (not a probability).**
+1. Re-save the image as JPEG at quality 90 and take the absolute per-channel difference.
+2. Take the max over the three channels.
+3. Apply a Gaussian blur with sigma 2.
+4. Score = clip(diff / 10, 0, 1).
+
+The normalisation constant 10 is **fixed** (set from the maximum smoothed difference on 24
+train pages, which was 9.5). It is not per-image min-max, which would stretch an authentic
+page's noise to full range. ELA runs at native resolution because resampling destroys the
+JPEG block grid.
+
+**Shared inference code (`src/docforge`).**
+- Tiled inference: tile 256, stride 128, reflect padding, 2-D Hann blending with a 0.01 floor,
+  long side capped at 2000 px.
+- Binned thresholds (1000 bins).
+- Metrics and bootstrap CIs.
+
+The serving API in Phase 5 will reuse the same code.
+
+**Protocol (validation only).**
+1. One global pixel threshold maximising pooled pixel F1.
+2. An image-score rule (max / mean of top 500 / fraction above the pixel threshold), chosen by ROC-AUC.
+3. An image threshold reaching 90% recall on tampered validation pages.
+
+All three are frozen in a JSON file. `research/evaluate.py` refuses any split named `test*`
+without such a file, and refuses files not selected on `val`.
+
+**ELA on validation (SYNTHETIC data; thresholds selected on the same data, so optimistic).**
+Source: `results/val_ela.json`. 180 pages (120 tampered, 60 authentic); 95% bootstrap CIs over 1000 resamples.
+
+| Metric | Value |
+|---|---|
+| Image ROC-AUC (rule `max`) | 0.507 [0.426, 0.597] |
+| Pooled pixel F1 at pixel threshold 0.144 | 0.020 [0.015, 0.026] |
+| Per-image pixel F1 (tampered pages) | 0.031 [0.023, 0.039] |
+| Validation recall / FPR at the frozen image threshold | 0.90 / 0.87 |
+
+**ELA is at chance level on this dataset.** A controlled diagnostic on 40 train sources
+(`results/ela_diagnostic.json`, `research/ela_diagnostic.py`) regenerates the same edits
+without resize and blur. Image AUC moves only from 0.51 to 0.56, and pooled pixel F1 at an
+oracle threshold stays at or below 0.043. Hypothesis, not established: ELA responds mainly to
+high-contrast text edges, which cover the whole page, so edited text looks like untouched text.
+
+See `docs/FONTS.md` for fonts and licenses. Sections on the model, results,
 limitations, privacy and deployment are added as later phases complete.

@@ -1,0 +1,52 @@
+{
+  "note": "Diagnostic (NOT a selection step): why is ELA weak on this dataset?",
+  "split_used": "train",
+  "ela": {
+    "quality": 90,
+    "combine": "max",
+    "smooth_sigma": 2.0,
+    "norm_const": 10.0
+  },
+  "variants": {
+    "standard": {
+      "overrides": {},
+      "n_pages": 120,
+      "n_tampered": 80,
+      "image_auc_max": 0.513125,
+      "image_auc_top_k_mean": 0.5075,
+      "oracle_pooled_pixel_f1": 0.0353034769768401,
+      "oracle_threshold": 0.324
+    },
+    "no_resize_no_blur": {
+      "overrides": {
+        "resize.scale": [
+          1.0,
+          1.0
+        ],
+        "blur.prob": 0.0
+      },
+      "n_pages": 120,
+      "n_tampered": 80,
+      "image_auc_max": 0.556875,
+      "image_auc_top_k_mean": 0.55796875,
+      "oracle_pooled_pixel_f1": 0.043313264712920414,
+      "oracle_threshold": 0.35
+    },
+    "single_jpeg_no_resize": {
+      "overrides": {
+        "resize.scale": [
+          1.0,
+          1.0
+        ],
+        "blur.prob": 0.0,
+        "compression.double": false
+      },
+      "n_pages": 120,
+      "n_tampered": 80,
+      "image_auc_max": 0.52859375,
+      "image_auc_top_k_mean": 0.51171875,
+      "oracle_pooled_pixel_f1": 0.03208387108531743,
+      "oracle_threshold": 0.421
+    }
+  }
+}

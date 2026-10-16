@@ -32,7 +32,7 @@ from research.gen.tamper_ops import splice, text_overwrite
 from research.gen.templates import RENDERERS
 
 # Stream ids for seeding (never renumber: doing so changes the dataset).
-S_LAYOUT, S_STAGE1, S_VARIANT, S_POST, S_DONOR, S_SPLIT, S_DIFFICULTY = 0, 1, 2, 3, 4, 5, 6
+S_LAYOUT, S_STAGE1, S_VARIANT, S_POST, S_DONOR, S_SPLIT, S_DIFFICULTY, S_SPLICE_CLASS = 0, 1, 2, 3, 4, 5, 6, 7
 VARIANT_CODES = {"authentic": 0, "text_overwrite": 1, "splice": 2}
 DOC_TYPE_CODES = {"invoice": 0, "marksheet": 1}
 CORE_SPLITS = ("train", "val", "test")
@@ -79,28 +79,34 @@ def assign_splits(sources: list[dict], cfg: dict) -> dict[str, str]:
     return split_of
 
 
-def assign_difficulty(sources: list[dict], split_of: dict[str, str], cfg: dict) -> dict[str, str]:
-    """Text-overwrite difficulty per source: exactly round(hard_fraction * n) "hard" sources in
-    every (split, document type) group, the rest "easy"; which ones is decided by the seed."""
+def assign_balanced(sources: list[dict], split_of: dict[str, str], cfg: dict, stream_id: int,
+                    frac: float, labels: tuple[str, str]) -> dict[str, str]:
+    """Give exactly round(frac * n) sources labels[0] and the rest labels[1] in every
+    (split, document type) group; which sources get which label is decided by the seed.
+    Used for text-edit difficulty (hard/easy) and splice size class (field/block)."""
     out = {}
     for doc_type, code in DOC_TYPE_CODES.items():
         for si, split in enumerate(CORE_SPLITS):
             ids = [s["source_id"] for s in sources
                    if s["document_type"] == doc_type and split_of[s["source_id"]] == split]
-            n_hard = int(np.floor(len(ids) * cfg["tamper"]["hard_fraction"] + 0.5))
-            order = stream(cfg["seed"], S_DIFFICULTY, code, si).permutation(len(ids))
+            n_first = int(np.floor(len(ids) * frac + 0.5))
+            order = stream(cfg["seed"], stream_id, code, si).permutation(len(ids))
             for rank, j in enumerate(order):
-                out[ids[j]] = "hard" if rank < n_hard else "easy"
+                out[ids[j]] = labels[0] if rank < n_first else labels[1]
     return out
 
 
 def plan(cfg: dict) -> tuple[list[dict], dict[str, list[dict]]]:
-    """Sources annotated with their split and text-edit difficulty, plus split membership."""
+    """Sources annotated with split, text-edit difficulty and splice size class,
+    plus the members of each split (the donor pools)."""
     sources = plan_sources(cfg)
     split_of = assign_splits(sources, cfg)
-    diff_of = assign_difficulty(sources, split_of, cfg)
-    sources = [dict(s, split=split_of[s["source_id"]], text_difficulty=diff_of[s["source_id"]])
-               for s in sources]
+    diff_of = assign_balanced(sources, split_of, cfg, S_DIFFICULTY,
+                              cfg["tamper"]["hard_fraction"], ("hard", "easy"))
+    cls_of = assign_balanced(sources, split_of, cfg, S_SPLICE_CLASS,
+                             cfg["tamper"]["splice"]["field_fraction"], ("field", "block"))
+    sources = [dict(s, split=split_of[s["source_id"]], text_difficulty=diff_of[s["source_id"]],
+                    splice_size_class=cls_of[s["source_id"]]) for s in sources]
     members = {sp: [s for s in sources if s["split"] == sp] for sp in CORE_SPLITS}
     return sources, members
 
@@ -144,6 +150,46 @@ def _fonts(cfg) -> FontRegistry:
     return _FONTS
 
 
+def _alternate(label: str, k: int, pair: tuple[str, str]) -> str:
+    """Extra variants (k = 1, 3, ...) of the same source get the other label."""
+    return label if k % 2 == 0 else (pair[1] if label == pair[0] else pair[0])
+
+
+def make_variant(src: dict, members: list[dict], cfg: dict, page, base: np.ndarray,
+                 vtype: str, k: int, families: list[str]) -> dict:
+    """Create one variant (before post-processing) of an already rendered source.
+
+    Returns image, mask (render coordinates) and the metadata pieces; for edits also the
+    EditResult and, for text overwrites, the edited TextField (used by tests to rebuild and
+    inspect a saved edit exactly)."""
+    fonts = _fonts(cfg)
+    seed, tc, si = cfg["seed"], src["type_code"], src["index"]
+    vrng = stream(seed, tc, si, S_VARIANT, VARIANT_CODES[vtype], k)
+    out = {"difficulty": None, "splice_size_class": None, "edit": None, "donor_source_id": None,
+           "donor_box_xyxy": None, "result": None, "field": None}
+    if vtype == "authentic":
+        out.update(image=base.copy(), mask=np.zeros(base.shape[:2], bool))
+    elif vtype == "text_overwrite":
+        difficulty = _alternate(src["text_difficulty"], k, ("hard", "easy"))
+        fields = page.editable_fields()
+        field = fields[int(vrng.integers(len(fields)))]
+        res = text_overwrite(base, field, difficulty, cfg["tamper"], fonts, families, vrng)
+        out.update(image=res.image, mask=res.mask, difficulty=difficulty, edit=res.info,
+                   result=res, field=field)
+    else:
+        size_class = _alternate(src["splice_size_class"], k, ("field", "block"))
+        donor = choose_donor(src, members, stream(seed, tc, si, S_DONOR, k),
+                             cfg["tamper"]["splice"]["donor_same_type"])
+        donor_page, donor_img, donor_q1 = render_source(donor, cfg, fonts, families)
+        res = splice(base, donor_img, donor_page.fields, size_class, cfg["tamper"]["splice"], vrng,
+                     cfg["crops"]["ink_gray_threshold"])
+        res.info["donor_stage1_jpeg_quality"] = donor_q1
+        out.update(image=res.image, mask=res.mask, splice_size_class=size_class, edit=res.info,
+                   donor_source_id=donor["source_id"], donor_box_xyxy=res.info["donor_box_xyxy"],
+                   result=res)
+    return out
+
+
 def generate_source(src: dict, members: list[dict], cfg: dict, data_root: Path,
                     condition: str = "standard", families: list[str] | None = None,
                     write: bool = True) -> list[dict]:
@@ -152,40 +198,17 @@ def generate_source(src: dict, members: list[dict], cfg: dict, data_root: Path,
     With write=False nothing is saved; each dict then also carries the decoded `_image`
     and `_mask` arrays (used by the determinism test)."""
     cv2.setNumThreads(1)
-    fonts = _fonts(cfg)
     families = families or cfg["fonts"]["core"]
     seed, tc, si, split = cfg["seed"], src["type_code"], src["index"], src["split"]
-    page, base, q1 = render_source(src, cfg, fonts, families)
-    out_dir = data_root / "generated" / split
+    page, base, q1 = render_source(src, cfg, _fonts(cfg), families)
     if write:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        (data_root / "generated" / split).mkdir(parents=True, exist_ok=True)
     records = []
     for vtype, k in variant_list(cfg):
         vcode = VARIANT_CODES[vtype]
-        vrng = stream(seed, tc, si, S_VARIANT, vcode, k)
         sample_id = f"{src['source_id']}_{vtype}_{k}"
-        meta = {"difficulty": None, "edit": None, "donor_source_id": None, "donor_box_xyxy": None}
-        if vtype == "authentic":
-            img, mask = base.copy(), np.zeros(base.shape[:2], bool)
-        elif vtype == "text_overwrite":
-            difficulty = src["text_difficulty"]
-            if k % 2 == 1:  # extra text edits of the same source alternate difficulty
-                difficulty = "easy" if difficulty == "hard" else "hard"
-            fields = page.editable_fields()
-            field = fields[int(vrng.integers(len(fields)))]
-            res = text_overwrite(base, field, difficulty, cfg["tamper"], fonts, families, vrng)
-            img, mask = res.image, res.mask
-            meta.update(difficulty=difficulty, edit=res.info)
-        else:
-            donor = choose_donor(src, members, stream(seed, tc, si, S_DONOR, k),
-                                 cfg["tamper"]["splice"]["donor_same_type"])
-            _, donor_img, donor_q1 = render_source(donor, cfg, fonts, families)
-            res = splice(base, donor_img, cfg["tamper"]["splice"], vrng,
-                         cfg["crops"]["ink_gray_threshold"])
-            img, mask = res.image, res.mask
-            res.info["donor_stage1_jpeg_quality"] = donor_q1
-            meta.update(edit=res.info, donor_source_id=donor["source_id"],
-                        donor_box_xyxy=res.info["donor_box_xyxy"])
+        meta = make_variant(src, members, cfg, page, base, vtype, k, families)
+        img, mask = meta["image"], meta["mask"]
         post = sample_post_params(stream(seed, tc, si, S_POST, vcode, k), cfg)
         img2, mask2 = apply_post(img, mask, post)
         jpg = encode_jpeg(img2, post["final_jpeg_quality"])
@@ -198,7 +221,8 @@ def generate_source(src: dict, members: list[dict], cfg: dict, data_root: Path,
             "image_path": rel + ".jpg", "mask_path": rel + "_mask.png", "meta_path": rel + ".json",
             "image_label": int(vtype != "authentic"),
             "manipulation_type": "none" if vtype == "authentic" else vtype,
-            "difficulty": meta["difficulty"], "bbox_xyxy": bbox,
+            "difficulty": meta["difficulty"], "splice_size_class": meta["splice_size_class"],
+            "bbox_xyxy": bbox,
             "mask_positive_pixels": int(mask2.sum()),
             "seed": int(seed), "seed_key": {"type_code": tc, "index": si, "variant_code": vcode, "k": k},
             "generator_version": cfg["generator_version"],

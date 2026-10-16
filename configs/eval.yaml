@@ -1,0 +1,41 @@
+# Evaluation configuration. Every numeric default is an INITIAL ASSUMPTION, not a tuned value.
+# Thresholds and score rules are NOT set here: they are selected on validation by
+# research/evaluate.py and frozen into a JSON file before any test evaluation.
+
+data_root: data
+data_config: configs/data.yaml       # used to read the dataset hash file location
+
+analysis:
+  max_side: 2000                     # model inference: long side capped (ELA runs at native size)
+
+tiling:                              # model inference only (Phase 3+)
+  tile: 256
+  stride: 128
+  window_floor: 0.01                 # Hann window floor so edge weights are never zero
+  batch_size: 16
+
+ela:
+  quality: 90                        # JPEG re-save quality
+  combine: max                       # channel combination: max | mean
+  smooth_sigma: 2.0                  # Gaussian smoothing of the difference map (0 = off)
+  norm_const: 10.0                   # score = clip(diff / norm_const, 0, 1); from TRAIN-page maxima (9.5)
+
+thresholds:
+  n_bins: 1000                       # pixel threshold grid = all bin edges k / n_bins
+
+image_score:
+  rules: [max, top_k_mean, frac_above]
+  top_k: 500
+
+operating_point:
+  target_recall: 0.90                # chosen on validation tampered pages, then frozen
+  min_tampered: 30                   # below this, report "no reliable operating point"
+  min_authentic: 30
+  min_unique_scores: 10
+
+bootstrap:
+  n: 1000
+  seed: 0
+  level: 0.95
+
+workers: 8                           # parallel processes for ELA maps (does not change results)

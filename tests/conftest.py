@@ -40,15 +40,15 @@ def tiny_cfg(data_cfg) -> dict:
 def tiny_dataset(tiny_cfg, tmp_path_factory):
     root = tmp_path_factory.mktemp("tiny_data")
     build_dataset(tiny_cfg, root, workers=4)
-    return root, read_manifests(root)
+    return root, read_manifests(root), tiny_cfg
 
 
 @pytest.fixture(scope="session", params=["tiny", "full"])
 def dataset(request, data_cfg, tiny_dataset):
-    """(data_root, {split: records}) for the tiny test dataset and the real one."""
+    """(data_root, {split: records}, config) for the tiny test dataset and the real one."""
     if request.param == "tiny":
         return tiny_dataset
     root = resolve(data_cfg["paths"]["data_root"])
     if not (root / "manifests" / "train.jsonl").exists():
         pytest.skip("full dataset not generated yet (run research.gen.build_dataset)")
-    return root, read_manifests(root)
+    return root, read_manifests(root), data_cfg

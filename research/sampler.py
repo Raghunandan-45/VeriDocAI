@@ -4,6 +4,8 @@ Rules (configs/data.yaml `crops`):
 - 256x256 crops at native resolution of the saved (post-processed) page.
 - Positive crop: at least `min_positive_pixels` tampered pixels. The crop is placed so a
   random tampered pixel lands at a random position inside it (edit not always centred).
+- "Ink" means TEXT ink: dark pixels minus solid filled areas (see `text_ink`), so dark
+  header bands do not make a crop count as text-dense.
 - Negative crop: ZERO tampered pixels. `neg_text_dense_frac` of negatives must have ink
   density >= `text_dense_threshold`; the rest are uniform but not near-blank
   (ink density >= `min_ink_density`). Negatives come from authentic pages and from untouched
@@ -36,19 +38,34 @@ class Crop:
     ink_density: float
 
 
-class PageCache:
-    """Loads a page once and keeps image, mask, and integral images of ink and mask."""
+def text_ink(img: np.ndarray, gray_threshold: int, solid_kernel: int) -> np.ndarray:
+    """Text-ink map (uint8 0/1): dark pixels MINUS solid filled areas.
 
-    def __init__(self, data_root: Path, ink_gray_threshold: int, max_pages: int = 64):
+    Dark = grey < gray_threshold. Solid areas (coloured header bands, filled table headers,
+    logos) are what survives a morphological opening with a solid_kernel x solid_kernel
+    square; text strokes are thinner than the kernel and disappear in the opening. Without
+    this, crops of dark bands would count as "text-dense"."""
+    dark = (img.mean(axis=2) < gray_threshold).astype(np.uint8)
+    if solid_kernel <= 1:
+        return dark
+    solid = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((solid_kernel, solid_kernel), np.uint8))
+    return dark & (1 - solid)
+
+
+class PageCache:
+    """Loads a page once and keeps image, mask, and integral images of text ink and mask.
+    Memory is roughly 30 MB per cached full page, so keep max_pages small per worker."""
+
+    def __init__(self, data_root: Path, ink_gray_threshold: int, solid_kernel: int = 9, max_pages: int = 32):
         self.root = Path(data_root)
         self.thr = ink_gray_threshold
+        self.solid_kernel = solid_kernel
         self.get = lru_cache(maxsize=max_pages)(self._load)
 
     def _load(self, image_path: str, mask_path: str):
         img = np.asarray(Image.open(self.root / image_path).convert("RGB"))
         mask = (np.asarray(Image.open(self.root / mask_path)) > 127).astype(np.uint8)
-        ink = (img.mean(axis=2) < self.thr).astype(np.int32)
-        ink_ii = cv2.integral(ink.astype(np.uint8), sdepth=cv2.CV_32S)
+        ink_ii = cv2.integral(text_ink(img, self.thr, self.solid_kernel), sdepth=cv2.CV_32S)
         mask_ii = cv2.integral(mask, sdepth=cv2.CV_32S)
         return img, mask, ink_ii, mask_ii
 
@@ -59,7 +76,7 @@ def box_sum(ii: np.ndarray, x: int, y: int, w: int, h: int) -> int:
 
 
 class CropSampler:
-    def __init__(self, records: list[dict], data_root: Path, crops_cfg: dict, cache_pages: int = 64):
+    def __init__(self, records: list[dict], data_root: Path, crops_cfg: dict, cache_pages: int = 32):
         bad = sorted({r["split"] for r in records if r["split"] != "train"})
         if bad:
             raise ValueError(f"CropSampler only accepts TRAIN records; got splits {bad}")
@@ -70,7 +87,8 @@ class CropSampler:
         self.records = records
         self.tampered = [r for r in records if r["image_label"] == 1]
         self.authentic = [r for r in records if r["image_label"] == 0]
-        self.cache = PageCache(data_root, crops_cfg["ink_gray_threshold"], cache_pages)
+        self.cache = PageCache(data_root, crops_cfg["ink_gray_threshold"],
+                               crops_cfg["solid_fill_kernel_px"], cache_pages)
 
     # -- helpers ---------------------------------------------------------------------------
     def _page(self, r):

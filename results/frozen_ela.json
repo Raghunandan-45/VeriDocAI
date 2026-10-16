@@ -1,0 +1,21 @@
+{
+  "method": "ela",
+  "selected_on": "val",
+  "pixel_threshold": 0.144,
+  "n_bins": 1000,
+  "score_rule": "max",
+  "image_threshold": 0.31590009,
+  "target_recall": 0.9,
+  "operating_point_reliable": true,
+  "operating_point_reasons": [],
+  "top_k": 500,
+  "dataset_sha256": "ed41f4f37c3f2cb0ce53b9f8da60670952c213acf2f48520f7adad40adf5ad1c",
+  "eval_config_sha256": "32080dbf247c2feccc86d4af85e5588e5c68c7021c6958b47f3a0519c882a93c",
+  "ela": {
+    "quality": 90,
+    "combine": "max",
+    "smooth_sigma": 2.0,
+    "norm_const": 10.0
+  },
+  "limit": null
+}

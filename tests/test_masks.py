@@ -1,6 +1,7 @@
 """Dataset tests 1-6 and 10 (see README "Dataset tests")."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +9,7 @@ import pytest
 from PIL import Image
 
 from research.config import with_overrides
-from research.gen.build_dataset import generate_source, plan, plan_sources, render_source, stream
+from research.gen.build_dataset import generate_source, make_variant, plan, plan_sources, render_source, stream
 from research.gen.fonts import FontRegistry
 from research.gen.postprocess import apply_post, decode_image, encode_jpeg, resize_pair
 from research.gen.tamper_ops import clean_rerender, text_overwrite
@@ -21,7 +22,7 @@ def all_records(manifests):
 
 # 1 ------------------------------------------------------------------------------------------
 def test_one_image_mask_metadata_per_sample(dataset):
-    root, manifests = dataset
+    root, manifests, _ = dataset
     recs = all_records(manifests)
     ids = [r["sample_id"] for r in recs]
     assert len(ids) == len(set(ids)), "duplicate sample ids"
@@ -37,7 +38,7 @@ def test_one_image_mask_metadata_per_sample(dataset):
 
 # 2, 3, 4 ------------------------------------------------------------------------------------
 def test_image_mask_dims_and_mask_content(dataset):
-    root, manifests = dataset
+    root, manifests, _ = dataset
     for r in all_records(manifests):
         img = Image.open(root / r["image_path"])
         mask = np.asarray(Image.open(root / r["mask_path"]))
@@ -137,7 +138,44 @@ def test_same_seed_identical_decoded_pixels(tiny_cfg):
 
 
 # 10 -----------------------------------------------------------------------------------------
-def test_hard_edits_not_pixel_identical_to_clean_rerender(tiny_cfg):
+def test_saved_hard_edits_not_pixel_identical_to_clean_rerender(dataset):
+    """For EVERY hard text edit in the dataset: rebuild the edit from its seed, check it matches
+    the saved metadata and reproduces the saved image file exactly, then compare it with a
+    clean re-render of the same new value (same font, size, colour, position, default
+    anti-aliasing): before post-processing at least 10 pixels must differ by >= 3 grey levels,
+    and after the sample's own resize/blur/JPEG the saved image must still differ."""
+    root, manifests, cfg = dataset
+    sources, members = plan(cfg)
+    by_id = {s["source_id"]: s for s in sources}
+    fonts = FontRegistry(cfg["fonts"])
+    fams = cfg["fonts"]["core"]
+    hard = [r for recs in manifests.values() for r in recs if r["difficulty"] == "hard"]
+    pre, post_changed = [], []
+    for r in hard:
+        src = by_id[r["source_id"]]
+        page, base, _ = render_source(src, cfg, fonts, fams)
+        v = make_variant(src, members[src["split"]], cfg, page, base, "text_overwrite", r["seed_key"]["k"], fams)
+        assert json.loads(json.dumps(v["edit"])) == r["edit"], f"{r['sample_id']}: rebuilt edit != metadata"
+        clean = clean_rerender(v["result"].covered, v["field"], v["edit"]["new_value"], fonts)
+        changed = int((np.abs(v["image"].astype(int) - clean.astype(int)).max(axis=2) >= 3).sum())
+        assert changed >= 10, f"{r['sample_id']}: only {changed} px differ from a clean re-render"
+        p = {k: r["processing"][k] for k in ("resize_scale", "resize_interp", "blur_applied", "blur_sigma")}
+        q = r["processing"]["final_jpeg_quality"]
+        saved = np.asarray(Image.open(root / r["image_path"]).convert("RGB"))
+        final = decode_image(encode_jpeg(apply_post(v["image"], v["mask"], p)[0], q))
+        assert np.array_equal(final, saved), f"{r['sample_id']}: rebuild does not reproduce saved image"
+        clean_final = decode_image(encode_jpeg(apply_post(clean, v["mask"], p)[0], q))
+        n_final = int((np.abs(clean_final.astype(int) - saved.astype(int)).max(axis=2) >= 3).sum())
+        assert n_final > 0, f"{r['sample_id']}: identical to clean re-render after post-processing"
+        pre.append(changed)
+        post_changed.append(n_final)
+    assert len(hard) > 0
+    print(f"{len(hard)} saved hard edits; px differing >=3 levels: before post min {min(pre)} "
+          f"median {int(np.median(pre))}; after post min {min(post_changed)} median {int(np.median(post_changed))}")
+
+
+def test_forced_hard_edits_on_many_fields(tiny_cfg):
+    """Stress version of test 10: force a hard edit on 6 fields of every other tiny source."""
     fonts = FontRegistry(tiny_cfg["fonts"])
     families = tiny_cfg["fonts"]["core"]
     n_checked, min_changed = 0, None

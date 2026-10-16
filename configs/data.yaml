@@ -3,7 +3,7 @@
 # or optimal value. Paths are relative to the repository root unless absolute.
 
 seed: 20261016              # global seed; every random stream is derived from it
-generator_version: "1.0.0"  # bump whenever rendering/tampering/post-processing logic changes
+generator_version: "1.2.0"  # bump whenever rendering/tampering/post-processing logic changes
 
 paths:
   data_root: data                       # images/masks go to <data_root>/generated/<split>/
@@ -57,14 +57,25 @@ tamper:
   hard:
     size_delta_px: [-1, 0, 0, 1]   # "similar size": choose one
     offset_px: [0.3, 2.0]          # |sub-pixel / 1-2 px| shift magnitude
-    ink_shift: [10, 30]            # grey-level shift on 1-3 channels
+    ink_shift: [4, 10]             # grey-level shift on 1-3 channels (was 10-30: too visible)
     supersample: [3, 4]            # anti-aliasing change: render at Nx then box-downsample
     letter_spacing_px: [0.4, 1.2]  # |extra spacing| per character
     # each hard edit uses a random non-empty subset of: offset, ink_shift, antialias, letter_spacing
   splice:
-    width_px: [100, 420]           # donor patch size range (render coordinates)
-    height_px: [40, 220]
-    min_ink_density: 0.02          # donor patch must contain some content
+    field_fraction: 0.5            # share of splices that are field-sized; balanced per split x doc type
+    block:                         # large rectangular blocks (render coordinates)
+      width_px: [100, 420]
+      height_px: [40, 220]
+      min_ink_density: 0.05        # floor so no block is near-blank paper
+    field:                         # field-sized patches: 1-3 text lines starting at a donor text field
+      lines: [1, 3]
+      line_pitch_factor: 1.5       # line pitch ~= font size * this
+      pad_px: [3, 8]
+      extra_width_px: [0, 120]
+      min_ink_density: 0.03        # smaller floor: a single text line is sparser than a block
+    max_tries: 200                 # donor boxes tried before giving up (build fails loudly)
+    tint_match: true               # shift patch colour by (target paper - donor paper)
+    tint_residual: 2.0             # + uniform random residual in [-r, r] per channel (grey levels)
     donor_same_type: true          # prefer a donor of the same document type (always same split)
     margin_px: 20
 
@@ -92,7 +103,8 @@ crops:                             # training-only crop sampler (research/sample
   neg_from_authentic_frac: 0.5     # other negatives come from untouched regions of tampered pages
   near_edit_prob: 0.5              # P(text-dense negative on a tampered page is taken near the edit)
   near_edit_margin_px: 192
-  ink_gray_threshold: 128          # pixel counts as ink if grey < this
+  ink_gray_threshold: 128          # pixel counts as dark if grey < this
+  solid_fill_kernel_px: 9          # dark areas surviving a 9x9 opening (bands, filled headers) are not text ink
   text_dense_threshold: 0.04       # ink fraction of a crop to call it text-dense
   min_ink_density: 0.005           # crops below this ink fraction are "near-blank" and rejected
   max_tries: 50

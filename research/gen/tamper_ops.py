@@ -193,33 +193,80 @@ def clean_rerender(covered: np.ndarray, field: TextField, text: str, fonts: Font
     return out
 
 
-def splice(target: np.ndarray, donor: np.ndarray, scfg: dict, rng, gray_threshold: int = 128) -> EditResult:
+def paper_color(img: np.ndarray) -> np.ndarray:
+    """Per-channel median of the page (subsampled). Most of a document page is paper, so the
+    median is a robust estimate of the paper colour even with text, tables and bands."""
+    return np.median(img[::4, ::4].reshape(-1, 3), axis=0).astype(np.float32)
+
+
+def _block_box(donor: np.ndarray, scfg: dict, rng):
+    """Large block: a random box (size from config) anywhere inside the page margins."""
+    m, b = scfg["margin_px"], scfg["block"]
+    w = int(rng.integers(b["width_px"][0], b["width_px"][1] + 1))
+    h = int(rng.integers(b["height_px"][0], b["height_px"][1] + 1))
+    dx = int(rng.integers(m, donor.shape[1] - m - w))
+    dy = int(rng.integers(m, donor.shape[0] - m - h))
+    return (dx, dy, dx + w, dy + h), {}
+
+
+def _field_box(donor: np.ndarray, donor_fields: list[TextField], scfg: dict, rng):
+    """Field-sized patch: starts at a random donor text field and spans 1-3 text lines."""
+    f_cfg = scfg["field"]
+    H, W = donor.shape[:2]
+    cands = [f for f in donor_fields if f.bbox[2] - f.bbox[0] >= 15 and f.name != "logo"]
+    f = cands[int(rng.integers(len(cands)))]
+    n_lines = int(rng.integers(f_cfg["lines"][0], f_cfg["lines"][1] + 1))
+    pad = int(rng.integers(f_cfg["pad_px"][0], f_cfg["pad_px"][1] + 1))
+    extra = int(rng.integers(f_cfg["extra_width_px"][0], f_cfg["extra_width_px"][1] + 1))
+    pitch = int(round(f.size * f_cfg["line_pitch_factor"]))
+    x0, y0, x1, y1 = f.bbox
+    box = clamp_box((x0 - pad, y0 - pad, x1 + pad + extra, y1 + (n_lines - 1) * pitch + pad), W, H)
+    return box, {"donor_field_name": f.name, "lines": n_lines}
+
+
+def donor_box(donor, donor_fields, size_class, scfg, rng, gray_threshold=128):
+    """Resample a donor box of the given class until its ink density reaches the class floor
+    (`block.min_ink_density` / `field.min_ink_density`), so no patch is near-blank paper.
+    Raises if `max_tries` boxes all fail (never silently accepts a blank patch)."""
+    floor = scfg[size_class]["min_ink_density"]
+    for _ in range(scfg["max_tries"]):
+        if size_class == "field":
+            box, extra = _field_box(donor, donor_fields, scfg, rng)
+        else:
+            box, extra = _block_box(donor, scfg, rng)
+        dens = ink_density(donor[box[1]:box[3], box[0]:box[2]], gray_threshold)
+        if dens >= floor:
+            return box, dens, extra
+    raise RuntimeError(f"no {size_class} donor box with ink density >= {floor} in {scfg['max_tries']} tries")
+
+
+def splice(target: np.ndarray, donor: np.ndarray, donor_fields: list[TextField], size_class: str,
+           scfg: dict, rng, gray_threshold: int = 128) -> EditResult:
     """Paste a rectangular patch of `donor` at a random location of `target`.
 
-    The donor box is resampled until it contains at least `min_ink_density` ink (otherwise
-    we would paste blank paper onto blank paper, an edit with no visible content); if no box
-    qualifies after 50 tries the inkiest candidate is used.
+    size_class "block": large random block containing ink; "field": 1-3 text lines taken
+    from a donor text field. With tint_match, the patch is shifted by the difference of
+    paper colours (target - donor) plus a small uniform residual, so it is not trivially
+    visible as a differently tinted rectangle.
     """
     H, W = target.shape[:2]
     m = scfg["margin_px"]
-    best = None
-    for _ in range(50):
-        w = int(rng.integers(scfg["width_px"][0], scfg["width_px"][1] + 1))
-        h = int(rng.integers(scfg["height_px"][0], scfg["height_px"][1] + 1))
-        dx = int(rng.integers(m, donor.shape[1] - m - w))
-        dy = int(rng.integers(m, donor.shape[0] - m - h))
-        dens = ink_density(donor[dy:dy + h, dx:dx + w], gray_threshold)
-        if best is None or dens > best[0]:
-            best = (dens, dx, dy, w, h)
-        if dens >= scfg["min_ink_density"]:
-            break
-    dens, dx, dy, w, h = best
+    (dx0, dy0, dx1, dy1), dens, extra = donor_box(donor, donor_fields, size_class, scfg, rng, gray_threshold)
+    w, h = dx1 - dx0, dy1 - dy0
+    patch = donor[dy0:dy1, dx0:dx1].astype(np.float32)
+    shift = np.zeros(3, np.float32)
+    if scfg["tint_match"]:
+        r = float(scfg["tint_residual"])
+        shift = paper_color(target) - paper_color(donor) + rng.uniform(-r, r, 3).astype(np.float32)
+        patch = patch + shift
     tx = int(rng.integers(m, W - m - w))
     ty = int(rng.integers(m, H - m - h))
     out = target.copy()
-    out[ty:ty + h, tx:tx + w] = donor[dy:dy + h, dx:dx + w]
+    out[ty:ty + h, tx:tx + w] = np.clip(np.rint(patch), 0, 255).astype(np.uint8)
     mask = np.zeros((H, W), bool)
     mask[ty:ty + h, tx:tx + w] = True
-    info = {"donor_box_xyxy": [dx, dy, dx + w, dy + h], "dest_box_render_xyxy": [tx, ty, tx + w, ty + h],
-            "donor_ink_density": round(dens, 4)}
+    info = {"size_class": size_class, "donor_box_xyxy": [dx0, dy0, dx1, dy1],
+            "dest_box_render_xyxy": [tx, ty, tx + w, ty + h],
+            "donor_ink_density": round(dens, 4),
+            "tint_shift_rgb": [round(float(v), 2) for v in shift], **extra}
     return EditResult(out, mask, info)

@@ -18,16 +18,22 @@ from PIL import Image  # noqa: E402
 
 from research.config import load_config, resolve  # noqa: E402
 
-ROWS = [("none", None), ("text_overwrite", "easy"), ("text_overwrite", "hard"), ("splice", None),
-        ("text_overwrite", "hard")]
+ROWS = [("none", None), ("text_overwrite", "easy"), ("text_overwrite", "hard"), ("splice", "block"),
+        ("splice", "field")]
+
+
+def subtype(r: dict):
+    """difficulty for text overwrites, size class for splices, None for authentic pages."""
+    return r.get("difficulty") or r.get("splice_size_class")
 
 
 def counts_table(by_split: dict[str, list[dict]]) -> pd.DataFrame:
     rows = [{"split": r["split"], "document_type": r["document_type"],
-             "manipulation_type": r["manipulation_type"], "difficulty": r["difficulty"] or "n/a"}
+             "manipulation_type": r["manipulation_type"], "difficulty": r["difficulty"] or "n/a",
+             "splice_size_class": r.get("splice_size_class") or "n/a"}
             for recs in by_split.values() for r in recs]
     df = pd.DataFrame(rows)
-    return (df.groupby(["split", "document_type", "manipulation_type", "difficulty"])
+    return (df.groupby(["split", "document_type", "manipulation_type", "difficulty", "splice_size_class"])
             .size().rename("count").reset_index())
 
 
@@ -63,7 +69,8 @@ def _caption(r) -> str:
         if e["imperfections"]:
             s += f"  imperf={','.join(e['imperfections'])}"
     elif r["manipulation_type"] == "splice":
-        s += f"\ndonor {r['donor_source_id']} box {r['donor_box_xyxy']}"
+        s += f"/{r['splice_size_class']}\ndonor {r['donor_source_id']} box {r['donor_box_xyxy']}"
+        s += f"  tint shift {e['tint_shift_rgb']}"
     else:
         s += f"\nfont {r['font_family']}"
     s += (f"\nJPEG q1={p['stage1_jpeg_quality']} q2={p['final_jpeg_quality']}  scale={p['resize_scale']}"
@@ -81,10 +88,10 @@ def pick_samples(by_split, seed: int) -> list[dict]:
             split = splits[i % len(splits)]
             i += 1
             pool = [r for r in by_split[split] if r["document_type"] == doc and r["manipulation_type"] == manip
-                    and r["difficulty"] == diff and r not in chosen]
+                    and subtype(r) == diff and r not in chosen]
             if not pool:  # fall back to any split
                 pool = [r for recs in by_split.values() for r in recs if r["document_type"] == doc
-                        and r["manipulation_type"] == manip and r["difficulty"] == diff and r not in chosen]
+                        and r["manipulation_type"] == manip and subtype(r) == diff and r not in chosen]
             if pool:
                 chosen.append(pool[int(rng.integers(len(pool)))])
     return chosen

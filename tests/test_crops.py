@@ -6,15 +6,16 @@ from collections import Counter
 import numpy as np
 import pytest
 
-from research.sampler import CropSampler
+from research.sampler import CropSampler, text_ink
 
 
 @pytest.fixture(scope="module")
-def crops(tiny_dataset, data_cfg):
-    root, manifests = tiny_dataset
-    s = CropSampler(manifests["train"], root, data_cfg["crops"])
+def crops(dataset):
+    """600 crops from the train split of the tiny dataset and of the full data/ dataset."""
+    root, manifests, cfg = dataset
+    s = CropSampler(manifests["train"], root, cfg["crops"])
     rng = np.random.default_rng(123)
-    return [s.sample(rng) for _ in range(600)], data_cfg["crops"]
+    return [s.sample(rng) for _ in range(600)], cfg["crops"]
 
 
 def test_crop_shapes_and_binary_masks(crops):
@@ -63,8 +64,28 @@ def test_edit_not_always_centred(crops):
     assert offs.std(axis=0).min() > 20, f"edit centroid offsets too concentrated: std {offs.std(axis=0)}"
 
 
+def test_text_dense_negatives_are_text_not_bands(crops):
+    """Text-dense negatives must qualify on TEXT strokes (dark pixels minus solid fills),
+    so dark header/table bands cannot make a crop text-dense on their own."""
+    cs, cfg = crops
+    dense = [c for c in cs if c.mode in ("neg_text_dense", "neg_near_edit")]
+    shares = []
+    for c in dense:
+        dark = (c.image.mean(axis=2) < cfg["ink_gray_threshold"]).astype(np.uint8)
+        stroke = text_ink(c.image, cfg["ink_gray_threshold"], cfg["solid_fill_kernel_px"])
+        # recomputed on the crop alone (page-level opening differs slightly at crop borders)
+        assert stroke.mean() >= 0.8 * cfg["text_dense_threshold"], f"{c.sample_id} {c.xy}: not text-dense"
+        shares.append(1 - stroke.sum() / max(dark.sum(), 1))
+    shares = np.array(shares)
+    band_dominated = float((shares > 0.5).mean())
+    print(f"text-dense negatives: {len(dense)}; solid-fill share of dark px median {np.median(shares):.3f}; "
+          f"crops where solid fill > 50% of dark px: {band_dominated:.3f}")
+    # regression guard: 0.527 before the text-ink fix, 0.275 after (1500-draw measurement on the full train split)
+    assert band_dominated < 0.40
+
+
 def test_sampler_refuses_non_train_records(tiny_dataset, data_cfg):
-    root, manifests = tiny_dataset
+    root, manifests, _ = tiny_dataset
     for split in ("val", "test"):
         with pytest.raises(ValueError):
             CropSampler(manifests["train"] + manifests[split][:1], root, data_cfg["crops"])
