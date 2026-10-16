@@ -1,0 +1,10 @@
+sha256=5e24a62538a38d10e361f5f684293bf20a20eb12bb34d795743d8642ac20df8b
+num_samples=1200
+count_train=840
+count_val=180
+count_test=180
+pillow=12.3.0
+freetype=2.14.3
+libjpeg_turbo=6.2
+numpy=2.2.6
+opencv=5.0.0

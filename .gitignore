@@ -1,0 +1,48 @@
+# Python / environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# Secrets and machine-local overrides (Kaggle kernel link, tokens, local paths)
+.env
+.env.*
+configs/local.yaml
+kaggle.json
+
+# Generated data (regenerate with the dataset command)
+/data/
+
+# Model weights and checkpoints
+artifacts/*
+!artifacts/.gitkeep
+/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+
+# Large result files. Small results/*.json and results/*.csv stay tracked.
+results/**/*.png
+results/**/*.jpg
+results/**/*.npy
+results/**/*.npz
+results/failures/
+!results/contact_sheet.png
+
+# Logs and temp files
+*.log
+tmp/
+
+# Editors / OS
+CLAUDE.md
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,30 @@
+# VeriDoc AI - pinned direct dependencies (Python 3.10+).
+#
+# Local CPU install (torch first, from the CPU wheel index, so nothing pulls CUDA wheels):
+#   python3 -m venv .venv
+#   .venv/bin/pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
+#   .venv/bin/pip install -r requirements.txt
+#
+# On Kaggle, torch/torchvision are NOT reinstalled if the kernel already has a working
+# CUDA build (research/kaggle_run.py filters those two lines out).
+# requirements-lock.txt holds the full `pip freeze` (including transitive deps) of the
+# local environment for exact reproduction.
+#
+# Pillow, numpy, opencv and scipy are pinned exactly because the synthetic dataset hash
+# depends on their rendering / JPEG / resize / blur behaviour.
+
+torch==2.14.1
+torchvision==0.29.1
+segmentation-models-pytorch==0.5.0
+pillow==12.3.0
+numpy==2.2.6
+opencv-python-headless==5.0.0.93
+scipy==1.15.3
+scikit-learn==1.7.2
+pyyaml==6.0.3
+pandas==2.3.3
+matplotlib==3.10.9
+pytest==9.1.1
+fastapi==0.143.3
+uvicorn==0.54.0
+python-multipart==0.0.32

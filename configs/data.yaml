@@ -1,0 +1,101 @@
+# Synthetic dataset configuration.
+# Every numeric default below is an INITIAL ASSUMPTION chosen to look plausible, not a tuned
+# or optimal value. Paths are relative to the repository root unless absolute.
+
+seed: 20261016              # global seed; every random stream is derived from it
+generator_version: "1.0.0"  # bump whenever rendering/tampering/post-processing logic changes
+
+paths:
+  data_root: data                       # images/masks go to <data_root>/generated/<split>/
+  hash_file: results/dataset_manifest_hash.txt
+  counts_csv: results/dataset_counts.csv
+  contact_sheet: results/contact_sheet.png
+
+page:
+  width: 1240                 # render size (A4 at 150 dpi)
+  height: 1754
+
+sources:                      # number of source documents per type
+  invoice: 200
+  marksheet: 200
+
+variants:                     # samples generated per source
+  authentic: 1
+  text_overwrite: 1
+  splice: 1
+
+splits:                       # by SOURCE, stratified by document type, fixed seed
+  train: 0.70
+  val: 0.15
+  test: 0.15
+
+fonts:
+  dir: assets/fonts
+  families:                   # family -> [regular file, bold file]
+    DejaVu Sans: [DejaVuSans.ttf, DejaVuSans-Bold.ttf]
+    DejaVu Serif: [DejaVuSerif.ttf, DejaVuSerif-Bold.ttf]
+    DejaVu Sans Mono: [DejaVuSansMono.ttf, DejaVuSansMono-Bold.ttf]
+    Liberation Sans: [LiberationSans-Regular.ttf, LiberationSans-Bold.ttf]
+    Liberation Serif: [LiberationSerif-Regular.ttf, LiberationSerif-Bold.ttf]
+    Liberation Mono: [LiberationMono-Regular.ttf, LiberationMono-Bold.ttf]
+    Lato: [Lato-Regular.ttf, Lato-Bold.ttf]
+    Ubuntu: [Ubuntu-R.ttf, Ubuntu-B.ttf]
+  core: [DejaVu Sans, DejaVu Serif, DejaVu Sans Mono, Liberation Sans, Liberation Serif, Liberation Mono]
+  heldout: [Lato, Ubuntu]     # stretch split test_unseen only; never used for train/val/test
+
+render:
+  paper_noise_std: [0.0, 3.0]      # per-page Gaussian paper noise std (grey levels)
+  secondary_header_font_prob: 0.3  # chance the header uses a different family than the body
+
+tamper:
+  hard_fraction: 0.5               # P(text overwrite is "hard"); rest are "easy"
+  cover_pad_px: [2, 4]             # padding around the old value's ink box when covering it
+  cover_ring_px: 4                 # ring width used to estimate the local background
+  easy:
+    size_ratio_small: [0.75, 0.88] # "noticeably different" font size ratios
+    size_ratio_large: [1.15, 1.30]
+  hard:
+    size_delta_px: [-1, 0, 0, 1]   # "similar size": choose one
+    offset_px: [0.3, 2.0]          # |sub-pixel / 1-2 px| shift magnitude
+    ink_shift: [10, 30]            # grey-level shift on 1-3 channels
+    supersample: [3, 4]            # anti-aliasing change: render at Nx then box-downsample
+    letter_spacing_px: [0.4, 1.2]  # |extra spacing| per character
+    # each hard edit uses a random non-empty subset of: offset, ink_shift, antialias, letter_spacing
+  splice:
+    width_px: [100, 420]           # donor patch size range (render coordinates)
+    height_px: [40, 220]
+    min_ink_density: 0.02          # donor patch must contain some content
+    donor_same_type: true          # prefer a donor of the same document type (always same split)
+    margin_px: 20
+
+compression:
+  double: true                     # stage-1 JPEG of the clean page before tampering
+  stage1_quality: [70, 95]
+  final_quality: [60, 95]
+
+resize:
+  scale: [0.8, 1.2]
+  interpolations: [bilinear, lanczos]   # image only; masks always use NEAREST
+
+blur:
+  prob: 0.3
+  sigma: [0.3, 1.0]                # "sigma up to 1.0"; lower bound avoids no-op blurs
+
+build:
+  workers: 8                       # parallel processes (0 = serial); does not affect output
+
+crops:                             # training-only crop sampler (research/sampler.py)
+  size: 256
+  min_positive_pixels: 64
+  p_positive: 0.5
+  neg_text_dense_frac: 0.7         # remaining negatives are uniform (but not near-blank)
+  neg_from_authentic_frac: 0.5     # other negatives come from untouched regions of tampered pages
+  near_edit_prob: 0.5              # P(text-dense negative on a tampered page is taken near the edit)
+  near_edit_margin_px: 192
+  ink_gray_threshold: 128          # pixel counts as ink if grey < this
+  text_dense_threshold: 0.04       # ink fraction of a crop to call it text-dense
+  min_ink_density: 0.005           # crops below this ink fraction are "near-blank" and rejected
+  max_tries: 50
+  aug:
+    scale_prob: 0.3                # small scale jitter applied identically to image and mask
+    scale_range: [0.9, 1.1]        # no flips (they corrupt text)
