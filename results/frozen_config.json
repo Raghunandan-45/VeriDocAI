@@ -1,0 +1,22 @@
+{
+  "method": "model",
+  "selected_on": "val",
+  "pixel_threshold": 0.867,
+  "n_bins": 1000,
+  "score_rule": "top_k_mean",
+  "image_threshold": 0.21001346,
+  "target_recall": 0.9,
+  "operating_point_reliable": true,
+  "operating_point_reasons": [],
+  "top_k": 500,
+  "dataset_sha256": "ed41f4f37c3f2cb0ce53b9f8da60670952c213acf2f48520f7adad40adf5ad1c",
+  "eval_config_sha256": "32080dbf247c2feccc86d4af85e5588e5c68c7021c6958b47f3a0519c882a93c",
+  "limit": null,
+  "checkpoint": "artifacts/best.pt",
+  "checkpoint_sha256": "7a1dc5a63d038744cd4ffd99e48332d653cf9423c16e8f2f7dc6fecfaaf6aef1",
+  "train_config_sha256": "e3692ba6ed9dbbcbd5af6e6bf22e35d8206a3de97f6e57dc3f272263062a9c2b",
+  "checkpoint_epoch": 8,
+  "stride": 128,
+  "tile": 256,
+  "max_side": 2000
+}

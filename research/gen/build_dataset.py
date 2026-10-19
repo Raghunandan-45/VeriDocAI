@@ -14,6 +14,7 @@ donor choice, split). Results therefore do not depend on worker count or process
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp  # spawn: forking after torch/OpenMP init can deadlock
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -257,7 +258,7 @@ def build_dataset(cfg: dict, data_root: Path, workers: int | None = None) -> dic
     jobs = [(src, members[src["split"]], cfg, data_root) for src in sources]
     workers = cfg["build"]["workers"] if workers is None else workers
     if workers and workers > 0:
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn")) as ex:
             results = list(ex.map(_work, jobs, chunksize=2))
     else:
         results = [_work(j) for j in jobs]

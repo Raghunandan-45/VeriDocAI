@@ -1,0 +1,126 @@
+{
+  "evidence_class": "replay of the training crop stream (train split only)",
+  "epochs": 10,
+  "visits_per_epoch": 1600,
+  "crops_per_visit": 4,
+  "seed": 1234,
+  "n_crops": 64000,
+  "n_positive_crops": 33365,
+  "positive_pixels_total": 245639698,
+  "crops_by_mode": {
+    "neg_near_edit": 3950,
+    "neg_text_dense": 16767,
+    "neg_uniform": 9918,
+    "positive": 33365
+  },
+  "groups": {
+    "manipulation_type": {
+      "splice": {
+        "positive_crops": 16948,
+        "share_of_positive_crops": 0.508,
+        "positive_pixels": 218135753,
+        "share_of_positive_pixels": 0.888,
+        "mean_positive_pixels_per_positive_crop": 12870.9,
+        "median_positive_pixels_per_positive_crop": 9546.0,
+        "mean_positive_fraction_of_crop": 0.1964
+      },
+      "text_overwrite": {
+        "positive_crops": 16417,
+        "share_of_positive_crops": 0.492,
+        "positive_pixels": 27503945,
+        "share_of_positive_pixels": 0.112,
+        "mean_positive_pixels_per_positive_crop": 1675.3,
+        "median_positive_pixels_per_positive_crop": 1248.0,
+        "mean_positive_fraction_of_crop": 0.0256
+      }
+    },
+    "difficulty": {
+      "splice": {
+        "positive_crops": 16948,
+        "share_of_positive_crops": 0.508,
+        "positive_pixels": 218135753,
+        "share_of_positive_pixels": 0.888,
+        "mean_positive_pixels_per_positive_crop": 12870.9,
+        "median_positive_pixels_per_positive_crop": 9546.0,
+        "mean_positive_fraction_of_crop": 0.1964
+      },
+      "text_overwrite/easy": {
+        "positive_crops": 8472,
+        "share_of_positive_crops": 0.2539,
+        "positive_pixels": 14567467,
+        "share_of_positive_pixels": 0.0593,
+        "mean_positive_pixels_per_positive_crop": 1719.5,
+        "median_positive_pixels_per_positive_crop": 1275.5,
+        "mean_positive_fraction_of_crop": 0.0262
+      },
+      "text_overwrite/hard": {
+        "positive_crops": 7945,
+        "share_of_positive_crops": 0.2381,
+        "positive_pixels": 12936478,
+        "share_of_positive_pixels": 0.0527,
+        "mean_positive_pixels_per_positive_crop": 1628.3,
+        "median_positive_pixels_per_positive_crop": 1185.0,
+        "mean_positive_fraction_of_crop": 0.0248
+      }
+    },
+    "splice_size_class": {
+      "splice/block": {
+        "positive_crops": 8336,
+        "share_of_positive_crops": 0.2498,
+        "positive_pixels": 152687473,
+        "share_of_positive_pixels": 0.6216,
+        "mean_positive_pixels_per_positive_crop": 18316.6,
+        "median_positive_pixels_per_positive_crop": 15988.5,
+        "mean_positive_fraction_of_crop": 0.2795
+      },
+      "splice/field": {
+        "positive_crops": 8612,
+        "share_of_positive_crops": 0.2581,
+        "positive_pixels": 65448280,
+        "share_of_positive_pixels": 0.2664,
+        "mean_positive_pixels_per_positive_crop": 7599.7,
+        "median_positive_pixels_per_positive_crop": 5671.0,
+        "mean_positive_fraction_of_crop": 0.116
+      },
+      "text_overwrite": {
+        "positive_crops": 16417,
+        "share_of_positive_crops": 0.492,
+        "positive_pixels": 27503945,
+        "share_of_positive_pixels": 0.112,
+        "mean_positive_pixels_per_positive_crop": 1675.3,
+        "median_positive_pixels_per_positive_crop": 1248.0,
+        "mean_positive_fraction_of_crop": 0.0256
+      }
+    }
+  },
+  "train_page_mask_pixels": {
+    "splice": {
+      "n": 280,
+      "median": 18394.5,
+      "mean": 24939.9,
+      "min": 1071,
+      "max": 107616
+    },
+    "text_overwrite": {
+      "n": 280,
+      "median": 2030.0,
+      "mean": 2046.2,
+      "min": 224,
+      "max": 8576
+    },
+    "text_overwrite/easy": {
+      "n": 140,
+      "median": 2087.0,
+      "mean": 2117.8,
+      "min": 224,
+      "max": 8576
+    },
+    "text_overwrite/hard": {
+      "n": 140,
+      "median": 1996.0,
+      "mean": 1974.6,
+      "min": 255,
+      "max": 5841
+    }
+  }
+}

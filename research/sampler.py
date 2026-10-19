@@ -122,10 +122,45 @@ class CropSampler:
                 return crop
         raise RuntimeError("crop sampler failed 100 times in a row; check crop config")
 
+    def visit_probs(self) -> tuple[float, float]:
+        """(q, p_t) for page visits: visit a tampered page with probability q, and on it make
+        each crop positive with probability p_t; authentic visits give negatives only.
+        Solving q * p_t = p_positive and (1 - q) = neg_from_authentic_frac * (1 - p_positive)
+        keeps the same overall proportions as `sample()` (0.5/0.5 -> q = 0.75, p_t = 2/3)."""
+        P, A = self.cfg["p_positive"], self.cfg["neg_from_authentic_frac"]
+        q = 1.0 - A * (1.0 - P)
+        return q, P / q
+
+    def sample_visit(self, rng: np.random.Generator, n: int) -> list[Crop]:
+        """Load ONE page and cut `n` crops from it (amortises JPEG decoding over n crops)."""
+        q, p_t = self.visit_probs()
+        for _ in range(20):
+            tampered = bool(self.tampered) and (rng.random() < q or not self.authentic)
+            pool = self.tampered if tampered else self.authentic
+            r = pool[int(rng.integers(len(pool)))]
+            crops = []
+            for _ in range(4 * n):
+                if len(crops) == n:
+                    break
+                c = self._positive_on(r, rng) if tampered and rng.random() < p_t else self._negative_on(r, rng)
+                if c is not None:
+                    crops.append(c)
+            if len(crops) == n:
+                return crops
+        raise RuntimeError("could not fill a page visit after 20 pages; check crop config")
+
     def _positive(self, rng) -> Crop | None:
         if not self.tampered:
             return None
-        r = self.tampered[int(rng.integers(len(self.tampered)))]
+        return self._positive_on(self.tampered[int(rng.integers(len(self.tampered)))], rng)
+
+    def _negative(self, rng) -> Crop | None:
+        use_auth = rng.random() < self.cfg["neg_from_authentic_frac"] or not self.tampered
+        pool = self.authentic if (use_auth and self.authentic) else self.tampered
+        return self._negative_on(pool[int(rng.integers(len(pool)))], rng)
+
+    def _positive_on(self, r: dict, rng) -> Crop | None:
+        """Positive crop from tampered page `r` (>= min_positive_pixels tampered pixels)."""
         img, mask, ink_ii, mask_ii = self._page(r)
         H, W = mask.shape
         ys, xs = np.nonzero(mask)
@@ -146,12 +181,11 @@ class CropSampler:
             return Crop(ci, cm, True, "positive", r["sample_id"], (x, y), win, self._density(ink_ii, x, y, win))
         return None
 
-    def _negative(self, rng) -> Crop | None:
+    def _negative_on(self, r: dict, rng) -> Crop | None:
+        """Negative crop (zero tampered pixels) from page `r`: text-dense (possibly near the
+        edit on tampered pages) or uniform-but-not-blank."""
         c = self.cfg
         text_dense = rng.random() < c["neg_text_dense_frac"]
-        use_auth = rng.random() < c["neg_from_authentic_frac"] or not self.tampered
-        pool = self.authentic if (use_auth and self.authentic) else self.tampered
-        r = pool[int(rng.integers(len(pool)))]
         img, mask, ink_ii, mask_ii = self._page(r)
         H, W = mask.shape
         near = text_dense and r["image_label"] == 1 and rng.random() < c["near_edit_prob"]

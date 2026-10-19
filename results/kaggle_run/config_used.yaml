@@ -1,0 +1,118 @@
+# Copy of the Kaggle config_used.yaml with the Kaggle username replaced by <owner>.
+# The original file (sha256 628e48bc53c21dc23514872403eb4f2140a6783420d24f3c9f97cc7a94f01869)
+# was verified in results/artifacts_verification.json and is kept in artifacts/ (untracked).
+train_config:
+  data_root: /kaggle/input/datasets/<owner>/veridoc-data/data
+  output_dir: /kaggle/working/run
+  data_config: configs/data.yaml
+  eval_config: configs/eval.yaml
+  seed: 1234
+  model:
+    encoder_weights: imagenet
+    weights_path: null
+  train:
+    epochs: 10
+    batch_size: 16
+    crops_per_visit: 4
+    visits_per_epoch: 1600
+    lr: 0.0003
+    weight_decay: 0.0001
+    scheduler: cosine
+    bce_weight: 1.0
+    dice_weight: 1.0
+    amp: true
+    num_workers: 4
+    page_cache: 2
+    log_every: 50
+  val:
+    subset_pages: 36
+    subset_stride: 256
+    final_stride: 128
+    n_bins: 1000
+  smoke:
+    pages: 4
+    crops: 8
+    steps: 20
+    lr: 0.001
+crops:
+  size: 256
+  min_positive_pixels: 64
+  p_positive: 0.5
+  neg_text_dense_frac: 0.7
+  neg_from_authentic_frac: 0.5
+  near_edit_prob: 0.5
+  near_edit_margin_px: 192
+  ink_gray_threshold: 128
+  solid_fill_kernel_px: 9
+  text_dense_threshold: 0.04
+  min_ink_density: 0.005
+  max_tries: 50
+  aug:
+    scale_prob: 0.3
+    scale_range:
+    - 0.9
+    - 1.1
+tiling:
+  tile: 256
+  stride: 128
+  window_floor: 0.01
+  batch_size: 16
+analysis:
+  max_side: 2000
+environment:
+  python: 3.13.15
+  torch: 2.11.0+cu128
+  device: cuda
+  cuda_available: true
+  gpu: Tesla T4
+amp: true
+steps_per_epoch: 400
+val_subset_ids:
+- invoice_0010_splice_0
+- invoice_0016_splice_0
+- invoice_0016_text_overwrite_0
+- invoice_0026_authentic_0
+- invoice_0044_authentic_0
+- invoice_0055_splice_0
+- invoice_0070_splice_0
+- invoice_0084_authentic_0
+- invoice_0084_text_overwrite_0
+- invoice_0085_splice_0
+- invoice_0088_text_overwrite_0
+- invoice_0108_authentic_0
+- invoice_0121_splice_0
+- invoice_0123_authentic_0
+- invoice_0143_authentic_0
+- invoice_0143_text_overwrite_0
+- invoice_0197_splice_0
+- marksheet_0001_splice_0
+- marksheet_0009_authentic_0
+- marksheet_0009_splice_0
+- marksheet_0010_text_overwrite_0
+- marksheet_0034_authentic_0
+- marksheet_0034_text_overwrite_0
+- marksheet_0053_text_overwrite_0
+- marksheet_0069_authentic_0
+- marksheet_0079_splice_0
+- marksheet_0079_text_overwrite_0
+- marksheet_0086_text_overwrite_0
+- marksheet_0119_authentic_0
+- marksheet_0125_authentic_0
+- marksheet_0141_splice_0
+- marksheet_0163_splice_0
+- marksheet_0173_authentic_0
+- marksheet_0173_splice_0
+- marksheet_0178_splice_0
+- marksheet_0191_splice_0
+argv:
+- --output-dir
+- /kaggle/working/run
+- --batch-size
+- '16'
+- --epochs
+- '10'
+- --data-root
+- /kaggle/input/datasets/<owner>/veridoc-data/data
+- --encoder-weights
+- imagenet
+- --amp

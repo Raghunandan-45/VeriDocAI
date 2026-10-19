@@ -1,0 +1,9 @@
+metric,ela,ela_ci95,model,model_ci95
+pixel_threshold (val-selected),0.144,,0.867,
+pooled pixel F1,0.0201,"[0.0148, 0.0257]",0.6025,"[0.5209, 0.6683]"
+pooled pixel IoU,0.0101,,0.4311,
+per-image pixel F1 (tampered),0.0307,"[0.0235, 0.0390]",0.3036,"[0.2347, 0.3686]"
+image AUC (val-selected rule),0.5067,"[0.4263, 0.5966]",0.7039,"[0.6280, 0.7754]"
+val recall at frozen image threshold,0.9,,0.9,
+val FPR at frozen image threshold,0.8667,"[0.7829, 0.9500]",0.7667,"[0.6667, 0.8667]"
+score rule,max,,top_k_mean,

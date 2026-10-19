@@ -46,3 +46,6 @@ CLAUDE.md
 .idea/
 .DS_Store
 Thumbs.db
+# Upload bundles for Kaggle (large; never commit)
+*.zip
+*:Zone.Identifier

@@ -4,6 +4,8 @@
     .venv/bin/python -m research.evaluate --method ela --split val
     # test (Phase 4): ONLY with a frozen config produced from validation
     .venv/bin/python -m research.evaluate --method ela --split test --frozen-config results/frozen_ela.json
+    # trained model (CPU is fine): validation selection -> results/frozen_config.json
+    .venv/bin/python -m research.evaluate --method model --checkpoint artifacts/best.pt --split val
 
 Protocol:
 - On "val": choose the global pixel threshold (max pooled pixel F1 over all bin edges), then
@@ -19,6 +21,7 @@ All results are SYNTHETIC evaluation, not evidence of real-world performance.
 from __future__ import annotations
 
 import argparse
+import multiprocessing as mp  # spawn: forking after torch/OpenMP init can deadlock
 import csv
 import hashlib
 import json
@@ -46,7 +49,7 @@ def is_test_split(split: str) -> bool:
     return split.startswith("test")
 
 
-def check_guard(split: str, frozen: dict | None, method: str, cfg: dict) -> None:
+def check_guard(split: str, frozen: dict | None, method: str, cfg: dict, model_info: dict | None = None) -> None:
     """Refuse test-split evaluation without a validation-frozen config, and refuse frozen
     configs that were not selected on validation or do not match the method/parameters."""
     if is_test_split(split) and frozen is None:
@@ -60,6 +63,10 @@ def check_guard(split: str, frozen: dict | None, method: str, cfg: dict) -> None
             raise TestSetGuardError(f"frozen config is for method {frozen.get('method')!r}, not {method!r}")
         if method == "ela" and frozen.get("ela") != cfg["ela"]:
             raise TestSetGuardError("ELA parameters in configs/eval.yaml differ from the frozen config")
+        if method == "model" and model_info is not None:
+            for key in ("checkpoint_sha256", "stride", "max_side"):
+                if frozen.get(key) != model_info[key]:
+                    raise TestSetGuardError(f"frozen {key}={frozen.get(key)!r} but this run uses {model_info[key]!r}")
 
 
 def sha256_bytes(b: bytes) -> str:
@@ -74,6 +81,44 @@ def read_manifest(path: Path) -> list[dict]:
 # --- per-image statistics ------------------------------------------------------------------
 def ela_score_map(img: np.ndarray, params: dict) -> np.ndarray:
     return ela_map(img, **params)
+
+
+class ModelScoreMap:
+    """Picklable full-page predictor: loads the checkpoint lazily (CPU unless CUDA exists)."""
+
+    def __init__(self, checkpoint: str, cfg: dict, stride: int):
+        self.checkpoint, self.cfg, self.stride = checkpoint, cfg, stride
+        self.fn = None
+
+    def __call__(self, img: np.ndarray) -> np.ndarray:
+        if self.fn is None:
+            import torch
+            from docforge.model import load_checkpoint, make_predict_fn
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model, _ = load_checkpoint(self.checkpoint, device)
+            self.fn = make_predict_fn(model, device, amp=device == "cuda")
+        from docforge.model import predict_page
+        t = self.cfg["tiling"]
+        return predict_page(img, self.fn, self.cfg["analysis"]["max_side"], t["tile"], self.stride,
+                            t["batch_size"], t["window_floor"])
+
+
+def sha256_path(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def model_info(checkpoint: str, cfg: dict, stride: int | None) -> dict:
+    """Identity of the model run, recorded in (and checked against) the frozen config."""
+    import torch
+    ck = torch.load(resolve(checkpoint), map_location="cpu", weights_only=True)
+    return {"checkpoint": checkpoint, "checkpoint_sha256": sha256_path(resolve(checkpoint)),
+            "train_config_sha256": sha256_bytes(json.dumps(ck.get("train_config"), sort_keys=True).encode()),
+            "checkpoint_epoch": ck.get("epoch"), "stride": stride or cfg["tiling"]["stride"],
+            "tile": cfg["tiling"]["tile"], "max_side": cfg["analysis"]["max_side"]}
 
 
 def image_stats(rec: dict, data_root: Path, map_fn, n_bins: int, top_k: int) -> dict:
@@ -95,7 +140,7 @@ def _stats_job(args):
 def collect(records, data_root: Path, map_fn, cfg: dict, workers: int) -> list[dict]:
     jobs = [(r, data_root, map_fn, cfg["thresholds"]["n_bins"], cfg["image_score"]["top_k"]) for r in records]
     if workers > 0:
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn")) as ex:
             return list(ex.map(_stats_job, jobs, chunksize=4))
     return [_stats_job(j) for j in jobs]
 
@@ -201,13 +246,16 @@ def _round(o, nd=5):
 
 def run(argv=None) -> dict:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--method", choices=["ela"], required=True)
+    ap.add_argument("--method", choices=["ela", "model"], required=True)
+    ap.add_argument("--checkpoint", default=None, help="model only, e.g. artifacts/best.pt")
+    ap.add_argument("--stride", type=int, default=None, help="model only; default tiling.stride")
     ap.add_argument("--split", required=True)
     ap.add_argument("--config", default="configs/eval.yaml")
     ap.add_argument("--frozen-config", default=None, help="JSON frozen on validation (required for test splits)")
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--out", default=None, help="default results/<split>_<method>.json")
-    ap.add_argument("--frozen-out", default=None, help="val only; default results/frozen_<method>.json")
+    ap.add_argument("--frozen-out", default=None,
+                    help="val only; default results/frozen_ela.json or results/frozen_config.json (model)")
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--limit", type=int, default=None, help="debug: first N records only")
     a = ap.parse_args(argv)
@@ -215,18 +263,28 @@ def run(argv=None) -> dict:
     cfg = load_config(a.config)
     frozen = json.loads(resolve(a.frozen_config).read_text()) if a.frozen_config else None
     check_guard(a.split, frozen, a.method, cfg)  # BEFORE any data is touched
+    minfo = None
+    if a.method == "model":
+        if not a.checkpoint:
+            ap.error("--method model needs --checkpoint")
+        minfo = model_info(a.checkpoint, cfg, a.stride)
+        check_guard(a.split, frozen, a.method, cfg, minfo)
 
     data_root = resolve(a.data_root or cfg["data_root"])
     records = read_manifest(data_root / "manifests" / f"{a.split}.jsonl")
     records = sorted(records, key=lambda r: r["sample_id"])[: a.limit]
-    map_fn = partial(ela_score_map, params=cfg["ela"])
-    workers = cfg["workers"] if a.workers is None else a.workers
+    if a.method == "ela":
+        map_fn = partial(ela_score_map, params=cfg["ela"])
+        workers = cfg["workers"] if a.workers is None else a.workers
+    else:  # one process; torch uses its own intra-op threads
+        map_fn = ModelScoreMap(str(resolve(a.checkpoint)), cfg, minfo["stride"])
+        workers = 0
     stats = collect(records, data_root, map_fn, cfg, workers)
 
     hash_file = resolve(load_config(cfg["data_config"])["paths"]["hash_file"])
     provenance = {"dataset_sha256": dict(l.split("=", 1) for l in hash_file.read_text().split())["sha256"],
                   "eval_config_sha256": sha256_bytes(resolve(a.config).read_bytes()),
-                  "ela": cfg["ela"], "limit": a.limit}
+                  "limit": a.limit, **({"ela": cfg["ela"]} if a.method == "ela" else minfo)}
     result = {"method": a.method, "split": a.split, **provenance}
     if frozen is None:  # validation: select, freeze, then report (optimistic) val metrics
         sel = select_on_validation(stats, cfg)
@@ -239,7 +297,7 @@ def run(argv=None) -> dict:
         result["evidence_class"] = ("SYNTHETIC validation; thresholds/rule selected on this same data, "
                                     "so these numbers are optimistic")
         result["selection"] = sel
-        fpath = resolve(a.frozen_out or f"results/frozen_{a.method}.json")
+        fpath = resolve(a.frozen_out or ("results/frozen_ela.json" if a.method == "ela" else "results/frozen_config.json"))
         if a.limit is None or a.frozen_out:
             fpath.write_text(json.dumps(_round(frozen, 8), indent=2))
             result["frozen_config_path"] = os.path.relpath(fpath, resolve("."))

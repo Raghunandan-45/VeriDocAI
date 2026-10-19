@@ -1,6 +1,7 @@
 # VeriDoc AI: document tampering localization (prototype)
 
-> Status: Phase 2 (ELA baseline + evaluation harness). No model results exist yet.
+> Status: Phase 3 done (U-Net trained on Kaggle, validated locally, thresholds frozen on
+> validation). No test-split results exist yet (Phase 4).
 
 VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
 a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
@@ -198,11 +199,101 @@ Source: `results/val_ela.json`. 180 pages (120 tampered, 60 authentic); 95% boot
 | Per-image pixel F1 (tampered pages) | 0.031 [0.023, 0.039] |
 | Validation recall / FPR at the frozen image threshold | 0.90 / 0.87 |
 
-**ELA is at chance level on this dataset.** A controlled diagnostic on 40 train sources
-(`results/ela_diagnostic.json`, `research/ela_diagnostic.py`) regenerates the same edits
-without resize and blur. Image AUC moves only from 0.51 to 0.56, and pooled pixel F1 at an
-oracle threshold stays at or below 0.043. Hypothesis, not established: ELA responds mainly to
-high-contrast text edges, which cover the whole page, so edited text looks like untouched text.
+**ELA is at chance level on this dataset** (validation image AUC 0.507, CI includes 0.5).
 
-See `docs/FONTS.md` for fonts and licenses. Sections on the model, results,
+What explains it, according to `results/ela_diagnostic.json` (40 train sources, the same edits
+regenerated in memory, oracle threshold, no CIs):
+
+| Post-processing variant | Image AUC (max) | Oracle pooled pixel F1 |
+|---|---|---|
+| standard (resize + blur + final JPEG) | 0.513 | 0.035 |
+| no resize, no blur | 0.557 | 0.043 |
+| no resize, no blur, single JPEG | 0.529 | 0.032 |
+
+Removing the resize and blur that follow the edit helps only slightly. **ELA is weak even
+without them**, so resampling is not the main reason. Hypothesis, not established: ELA
+responds mainly to high-contrast text edges, which cover the whole page, so edited text looks
+like any other text. Synthetic data only.
+
+## Model and training (Phase 3)
+
+- **Model:** `smp.Unet("resnet18", encoder_weights="imagenet", in_channels=3, classes=1)` with ImageNet normalisation.
+- **Loss:** BCE + soft Dice (weights 1 + 1).
+- **Optimiser:** AdamW (lr 3e-4, weight decay 1e-4) with a cosine schedule. AMP is on when running on GPU.
+- **Batching:** 16 crops of 256×256 per step, built from **page visits**. Each data item decodes one train page and
+  cuts 4 crops from it, so JPEG decoding is shared across crops. A tampered page is visited with
+  probability 0.75 and each crop on it is positive with probability 2/3. This keeps the crop rules:
+  50% positive crops, and half of the negatives from authentic pages.
+- **Epoch:** 1600 page visits, i.e. 6400 crops.
+- **Validation and checkpoints:**
+  - After each epoch, validate on a fixed subset of 36 full validation pages at stride 256.
+  - Keep the best checkpoint by pooled pixel F1 on that subset.
+  - At the end, validate the best checkpoint on all validation pages at stride 128.
+- These are starting guesses, not tuned values.
+- Training runs on a Kaggle T4 (see `docs/KAGGLE.md` and `research/kaggle_run.py`); inference works on CPU.
+
+```bash
+.venv/bin/python -m research.train --smoke --allow-cpu --encoder-weights none   # CPU overfit check
+python -m research.train --data-root <data> --output-dir <out> [--resume] [--batch-size N] [--no-amp]
+.venv/bin/python -m research.verify_artifacts --dir artifacts                  # after copying Kaggle outputs
+.venv/bin/python -m research.evaluate --method model --checkpoint artifacts/best.pt --split val
+```
+
+**CPU smoke test** (`results/smoke_cpu/smoke_losses.json`): random-init encoder, 8 fixed crops,
+20 steps at lr 1e-3. Loss went from 1.418 to 0.359; mean of the first 5 steps 1.178, mean of
+the last 5 steps 0.403. This only shows the training loop can fit data; it is not a result.
+
+### Training run (Kaggle T4)
+
+The run was done remotely by the author. Its logs are in `results/kaggle_run/`, and the
+sha256 of every downloaded file was re-checked locally (`results/artifacts_verification.json`).
+- Data: the Kaggle copy passed the dataset hash check (`ed41f4f3…`, 840/180/180).
+- Setup: 10 epochs, batch 16, AMP, ImageNet encoder.
+- Speed: about 81–85 s per epoch.
+- Losses: training loss fell from 1.097 to 0.423. Val-subset pooled F1 (36 pages, stride 256)
+  went from 0.040 to a best of 0.502 at **epoch 8**, then 0.466 at epoch 10.
+- `best.pt` is the epoch-8 checkpoint. It loads and runs on CPU (about 23.5 s for one 1906×1348
+  page at stride 128).
+
+### U-Net vs ELA on validation
+
+**Synthetic data. Thresholds and score rules were selected on these same validation pages, so
+every number here is optimistic.** The frozen held-out test results come in Phase 4.
+Sources: `results/val_model.json`, `results/val_ela.json`, `results/val_comparison.csv`,
+`results/frozen_config.json`. 180 pages (120 tampered, 60 authentic), 95% bootstrap CIs.
+
+| Metric | ELA | U-Net (epoch 8) |
+|---|---|---|
+| Pixel threshold (val-selected) | 0.144 | 0.867 |
+| Pooled pixel F1 | 0.020 [0.015, 0.026] | 0.602 [0.521, 0.668] |
+| Pooled pixel IoU | 0.010 | 0.431 |
+| Per-image pixel F1 (tampered pages) | 0.031 [0.024, 0.039] | 0.304 [0.235, 0.369] |
+| Image score rule (val-selected) | max | mean of top 500 |
+| Image ROC-AUC | 0.507 [0.426, 0.597] | 0.704 [0.628, 0.775] |
+| Val recall / FPR at the frozen image threshold (90% recall target) | 0.90 / 0.87 | 0.90 / 0.77 [0.67, 0.87] |
+
+The pixel scores and the image risk score are model scores, **not calibrated probabilities**.
+
+**Breakdown for the U-Net.** Each tampered group is scored against all 60 authentic pages for AUC.
+
+| Tampered group | n | Pooled pixel F1 | Per-image F1 | Image AUC |
+|---|---|---|---|---|
+| Splice (all) | 60 | 0.667 [0.587, 0.739] | 0.583 | 0.922 |
+| Splice, block | 30 | 0.666 | 0.598 | 0.955 |
+| Splice, field | 30 | 0.670 | 0.568 | 0.888 |
+| Text overwrite (all) | 60 | 0.068 [0.000, 0.142] | 0.024 | 0.486 [0.380, 0.593] |
+| Text overwrite, easy | 30 | 0.112 | 0.049 | 0.556 |
+| Text overwrite, hard | 30 | 0.000 | 0.000 | 0.417 |
+
+What this shows, on synthetic data only:
+- **Splices are localised well.** Pooled F1 is about 0.67 and image AUC 0.92.
+- **Text overwrites are essentially not detected.** Hard overwrites (same font, ±1 px size) get
+  F1 0.000, and the overwrite AUC is at chance. The overall image AUC of 0.70 mixes
+  these two very different behaviours.
+- **The image-level operating point is not useful yet.** At 90% validation recall, 77% of
+  authentic pages are flagged, because the model gives some high pixel scores on untouched
+  pages: 37% of authentic pages have at least one pixel above the pixel threshold
+  (`authentic_pages` in `results/val_model.json`).
+
+See `docs/FONTS.md` for fonts and licenses. Sections on the model results,
 limitations, privacy and deployment are added as later phases complete.

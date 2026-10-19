@@ -1,0 +1,72 @@
+{
+  "dir": "artifacts",
+  "missing": [],
+  "files": {
+    "best.pt": {
+      "expected": "7a1dc5a63d038744cd4ffd99e48332d653cf9423c16e8f2f7dc6fecfaaf6aef1",
+      "local": "7a1dc5a63d038744cd4ffd99e48332d653cf9423c16e8f2f7dc6fecfaaf6aef1",
+      "ok": true,
+      "bytes": 57415327
+    },
+    "config_used.yaml": {
+      "expected": "628e48bc53c21dc23514872403eb4f2140a6783420d24f3c9f97cc7a94f01869",
+      "local": "628e48bc53c21dc23514872403eb4f2140a6783420d24f3c9f97cc7a94f01869",
+      "ok": true,
+      "bytes": 2475
+    },
+    "data_config.yaml": {
+      "expected": "ac790e204449dfbdad94d8e02e8599e8762c7985189508471d47b0fef935f65b",
+      "local": "ac790e204449dfbdad94d8e02e8599e8762c7985189508471d47b0fef935f65b",
+      "ok": true,
+      "bytes": 5438
+    },
+    "final_val.json": {
+      "expected": "412013eeb4a4f062a82f0b804320b9c41e403b930435eb86b8f0218de34ba65b",
+      "local": "412013eeb4a4f062a82f0b804320b9c41e403b930435eb86b8f0218de34ba65b",
+      "ok": true,
+      "bytes": 323
+    },
+    "last.pt": {
+      "expected": "102c61795327049c65d1b38eb64c0fff0f6ee0729c241c5eda7e31711c435f02",
+      "local": "102c61795327049c65d1b38eb64c0fff0f6ee0729c241c5eda7e31711c435f02",
+      "ok": true,
+      "bytes": 172106811
+    },
+    "metrics.csv": {
+      "expected": "f23ca88e3f7661b1cb6ba9ce0bf753631966909bf402a739b4792a5323bbe3e7",
+      "local": "f23ca88e3f7661b1cb6ba9ce0bf753631966909bf402a739b4792a5323bbe3e7",
+      "ok": true,
+      "bytes": 1457
+    }
+  },
+  "all_hashes_ok": true,
+  "checkpoint": {
+    "epoch": 8,
+    "val_metric": "val_subset_best_pooled_f1",
+    "val_value": 0.5017235952509852,
+    "val_subset_threshold": 0.929,
+    "arch": {
+      "name": "Unet",
+      "encoder": "resnet18",
+      "in_channels": 3,
+      "classes": 1
+    }
+  },
+  "cpu_forward": {
+    "sample_id": "invoice_0010_authentic_0",
+    "image_hw": [
+      1906,
+      1348
+    ],
+    "prob_hw": [
+      1906,
+      1348
+    ],
+    "prob_min": 0.00014695970457978547,
+    "prob_max": 0.9381477236747742,
+    "finite": true,
+    "stride": 128,
+    "seconds": 23.5
+  },
+  "ok": true
+}

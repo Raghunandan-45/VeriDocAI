@@ -1,0 +1,97 @@
+{
+  "evidence_class": "SYNTHETIC; diagnostic only (val text-overwrite pages + a train sample); no test data",
+  "checkpoint_sha256": "7a1dc5a63d038744cd4ffd99e48332d653cf9423c16e8f2f7dc6fecfaaf6aef1",
+  "checkpoint_epoch": 8,
+  "pixel_threshold": 0.867,
+  "stride": 128,
+  "train_sample_seed": 0,
+  "summary": {
+    "val/all": {
+      "n": 60,
+      "categories": {
+        "detected (some mask pixels >= frozen thr)": 3,
+        "missed, high scores elsewhere (misplaced)": 15,
+        "missed, low scores everywhere": 41,
+        "weak response inside mask (0.5 <= in_max < thr)": 1
+      },
+      "page_max_inside_mask_frac": 0.0667,
+      "median_in_max": 0.0103,
+      "median_in_mean": 0.0041,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.656,
+      "median_top500_share_inside_mask": 0.0
+    },
+    "val/easy": {
+      "n": 30,
+      "categories": {
+        "detected (some mask pixels >= frozen thr)": 3,
+        "missed, high scores elsewhere (misplaced)": 8,
+        "missed, low scores everywhere": 18,
+        "weak response inside mask (0.5 <= in_max < thr)": 1
+      },
+      "page_max_inside_mask_frac": 0.1333,
+      "median_in_max": 0.0095,
+      "median_in_mean": 0.0038,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.6684,
+      "median_top500_share_inside_mask": 0.0
+    },
+    "val/hard": {
+      "n": 30,
+      "categories": {
+        "missed, high scores elsewhere (misplaced)": 7,
+        "missed, low scores everywhere": 23
+      },
+      "page_max_inside_mask_frac": 0.0,
+      "median_in_max": 0.0103,
+      "median_in_mean": 0.0045,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.6286,
+      "median_top500_share_inside_mask": 0.0
+    },
+    "train/all": {
+      "n": 30,
+      "categories": {
+        "detected (some mask pixels >= frozen thr)": 5,
+        "missed, high scores elsewhere (misplaced)": 3,
+        "missed, low scores everywhere": 20,
+        "weak response inside mask (0.5 <= in_max < thr)": 2
+      },
+      "page_max_inside_mask_frac": 0.1667,
+      "median_in_max": 0.0184,
+      "median_in_mean": 0.0067,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.71,
+      "median_top500_share_inside_mask": 0.0
+    },
+    "train/easy": {
+      "n": 15,
+      "categories": {
+        "detected (some mask pixels >= frozen thr)": 4,
+        "missed, high scores elsewhere (misplaced)": 2,
+        "missed, low scores everywhere": 7,
+        "weak response inside mask (0.5 <= in_max < thr)": 2
+      },
+      "page_max_inside_mask_frac": 0.2667,
+      "median_in_max": 0.1593,
+      "median_in_mean": 0.0417,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.8418,
+      "median_top500_share_inside_mask": 0.0
+    },
+    "train/hard": {
+      "n": 15,
+      "categories": {
+        "detected (some mask pixels >= frozen thr)": 1,
+        "missed, high scores elsewhere (misplaced)": 1,
+        "missed, low scores everywhere": 13
+      },
+      "page_max_inside_mask_frac": 0.0667,
+      "median_in_max": 0.0118,
+      "median_in_mean": 0.0047,
+      "median_in_frac_above_thr": 0.0,
+      "median_out_max": 0.6364,
+      "median_top500_share_inside_mask": 0.0
+    }
+  }
+}
