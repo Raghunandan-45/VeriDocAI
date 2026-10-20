@@ -1,0 +1,72 @@
+{
+  "dir": "artifacts/run2",
+  "missing": [],
+  "files": {
+    "best.pt": {
+      "expected": "4fdae75a79754102787fe037aa22bd623954ae3eeb93eef800028a3f4fd119d4",
+      "local": "4fdae75a79754102787fe037aa22bd623954ae3eeb93eef800028a3f4fd119d4",
+      "ok": true,
+      "bytes": 57415455
+    },
+    "config_used.yaml": {
+      "expected": "fd536de9ee72c68841d1e87ab8c5892d99c025a940f4dd27702871d2a4d2a3a5",
+      "local": "fd536de9ee72c68841d1e87ab8c5892d99c025a940f4dd27702871d2a4d2a3a5",
+      "ok": true,
+      "bytes": 2603
+    },
+    "data_config.yaml": {
+      "expected": "ac790e204449dfbdad94d8e02e8599e8762c7985189508471d47b0fef935f65b",
+      "local": "ac790e204449dfbdad94d8e02e8599e8762c7985189508471d47b0fef935f65b",
+      "ok": true,
+      "bytes": 5438
+    },
+    "final_val.json": {
+      "expected": "287c8b0410a5f829a555c16c4cf7330afe2fb5d40313bb4ffd9babfcbfc8b3f5",
+      "local": "287c8b0410a5f829a555c16c4cf7330afe2fb5d40313bb4ffd9babfcbfc8b3f5",
+      "ok": true,
+      "bytes": 460
+    },
+    "last.pt": {
+      "expected": "3d42ba1f35c1c10a0dadee3516b704396041b09c653bd51d89d49d4bcb250d2a",
+      "local": "3d42ba1f35c1c10a0dadee3516b704396041b09c653bd51d89d49d4bcb250d2a",
+      "ok": true,
+      "bytes": 172106939
+    },
+    "metrics.csv": {
+      "expected": "c468be51cae074efd0700b1ba66a2d07a3cd9bfe2d53719f82af42462ecde626",
+      "local": "c468be51cae074efd0700b1ba66a2d07a3cd9bfe2d53719f82af42462ecde626",
+      "ok": true,
+      "bytes": 4235
+    }
+  },
+  "all_hashes_ok": true,
+  "checkpoint": {
+    "epoch": 18,
+    "val_metric": "val_subset_macro_f1",
+    "val_value": 0.2859310288766381,
+    "val_subset_threshold": 0.948,
+    "arch": {
+      "name": "Unet",
+      "encoder": "resnet18",
+      "in_channels": 3,
+      "classes": 1
+    }
+  },
+  "cpu_forward": {
+    "sample_id": "invoice_0010_authentic_0",
+    "image_hw": [
+      1906,
+      1348
+    ],
+    "prob_hw": [
+      1906,
+      1348
+    ],
+    "prob_min": 4.42939790445962e-06,
+    "prob_max": 0.7635384202003479,
+    "finite": true,
+    "stride": 128,
+    "seconds": 20.47
+  },
+  "ok": true
+}

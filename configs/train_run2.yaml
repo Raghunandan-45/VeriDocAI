@@ -1,0 +1,46 @@
+# RUN 2 training configuration (the single approved retrain). Identical to configs/train.yaml
+# (run 1) except: train.epochs 20 (cosine schedule spans all 20 epochs), train.dice_mode
+# per_crop, val.subset_mode stratified_type, val.select_metric macro_f1, output_dir.
+# Every numeric default is an INITIAL ASSUMPTION (starting guess),
+# not a tuned value. Paths are relative to the repo root unless absolute; override on
+# Kaggle with --data-root / --output-dir (e.g. /kaggle/input/<dataset>/data, /kaggle/working/run).
+
+data_root: data
+output_dir: artifacts/run2
+data_config: configs/data.yaml     # crop sampling rules (section `crops`)
+eval_config: configs/eval.yaml     # tiling / analysis-size settings for validation
+seed: 1234
+
+model:
+  encoder_weights: imagenet        # imagenet (needs internet) | none
+  weights_path: null               # offline fallback: torchvision resnet18 .pth file (see docs/KAGGLE.md)
+
+train:
+  epochs: 20                       # run 1: 10 (LR reached 0 while train loss was still falling)
+  batch_size: 16                   # crops per optimisation step (must be divisible by crops_per_visit)
+  crops_per_visit: 4               # crops cut from each loaded page (amortises JPEG decode)
+  visits_per_epoch: 1600           # page visits per epoch -> 6400 crops per epoch
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  scheduler: cosine                # cosine | none (per optimisation step)
+  bce_weight: 1.0
+  dice_weight: 1.0
+  dice_mode: per_crop              # run 1: batch
+  amp: true                        # mixed precision on GPU only
+  num_workers: 4
+  page_cache: 2                    # pages cached per DataLoader worker (~30 MB each)
+  log_every: 50
+
+val:
+  subset_pages: 36                 # fixed per-epoch subset (12 authentic + 12 splice + 12 text overwrite)
+  subset_mode: stratified_type      # run 1: random
+  select_metric: macro_f1          # run 1: pooled_f1
+  subset_stride: 256               # coarser stride for speed during training
+  final_stride: 128                # full validation of the best checkpoint at the end
+  n_bins: 1000
+
+smoke:                             # --smoke: tiny overfit check (loss must decrease)
+  pages: 4
+  crops: 8
+  steps: 20
+  lr: 1.0e-3

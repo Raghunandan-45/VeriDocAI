@@ -150,22 +150,27 @@ run([sys.executable, "-m", "research.gen.dataset_hash", "--data-root", DATA_ROOT
      "--check", "results/dataset_manifest_hash.txt"])
 
 # %% Cell 4 - smoke run, then full training (resumable)
-OUT = WORK / "run"
+# Run 1 (baseline): TRAIN_CONFIG = "configs/train.yaml",      RUN_NAME = "run"
+# Run 2 (the one approved retrain): per-crop Dice + stratified selection + 20 epochs
+TRAIN_CONFIG = "configs/train_run2.yaml"
+RUN_NAME = "run2"
+OUT = WORK / RUN_NAME
 BATCH_SIZE = 16                    # initial assumption; lower if CUDA runs out of memory
-EPOCHS = 10                        # initial assumption; measure the first epoch before relying on it
+EPOCHS = None                      # None = take train.epochs from TRAIN_CONFIG (run 2: 20); an int overrides it
 AMP = True
 ENCODER_WEIGHTS = "imagenet"       # needs Internet ON; offline: "none" + WEIGHTS_PATH below
 WEIGHTS_PATH = ""                  # e.g. "/kaggle/input/datasets/<owner>/resnet18-weights/resnet18-f37072fd.pth"
 RESUME = False                     # True after a disconnect: continues from OUT/last.pt
 
-common = ["--data-root", DATA_ROOT, "--encoder-weights", ENCODER_WEIGHTS, "--amp" if AMP else "--no-amp"]
+common = ["--config", TRAIN_CONFIG, "--data-root", DATA_ROOT, "--encoder-weights", ENCODER_WEIGHTS,
+          "--amp" if AMP else "--no-amp"]
 if WEIGHTS_PATH:
     common += ["--weights-path", WEIGHTS_PATH]
 if not RESUME:
-    run([sys.executable, "-m", "research.train", "--smoke", "--output-dir", WORK / "smoke", *common])
+    run([sys.executable, "-m", "research.train", "--smoke", "--output-dir", WORK / f"smoke_{RUN_NAME}", *common])
 print("Starting full training. Note the 'epoch_seconds' of epoch 1 in metrics.csv before planning more epochs.")
 run([sys.executable, "-m", "research.train", "--output-dir", OUT, "--batch-size", BATCH_SIZE,
-     "--epochs", EPOCHS, *common, *(["--resume"] if RESUME else [])])
+     *(["--epochs", EPOCHS] if EPOCHS else []), *common, *(["--resume"] if RESUME else [])])
 
 # %% Cell 5 - outputs to download (sha256 + size), bundled into one zip
 import hashlib  # noqa: E402
@@ -181,12 +186,13 @@ for name in wanted:
     else:
         print(f"{name:20s} MISSING")
 print(open(OUT / "metrics.csv").read())
-bundle = WORK / "veridoc_artifacts.zip"
+bundle = WORK / f"veridoc_artifacts_{RUN_NAME}.zip"
 with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_STORED) as z:
     for name in wanted:
         if (OUT / name).exists():
             z.write(OUT / name, arcname=name)
-print("download:", bundle, f"({bundle.stat().st_size / 1e6:.0f} MB) -> unzip into artifacts/ locally")
+print("download:", bundle, f"({bundle.stat().st_size / 1e6:.0f} MB) -> unzip into artifacts/"
+      f"{'' if RUN_NAME == 'run' else RUN_NAME + '/'} locally")
 
 
 

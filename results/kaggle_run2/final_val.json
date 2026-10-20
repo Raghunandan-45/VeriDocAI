@@ -1,0 +1,13 @@
+{
+  "best_pooled_f1": 0.591138468210695,
+  "best_threshold": 0.885,
+  "macro_f1": 0.41263512938341623,
+  "macro_threshold": 0.903,
+  "f1_splice": 0.6320149398203756,
+  "f1_overwrite": 0.19325531894645684,
+  "auc_max": 0.6783333333333333,
+  "n_pages": 180,
+  "stride": 128,
+  "note": "best checkpoint on ALL validation pages; used for checkpoint selection, so optimistic. Frozen thresholds and test results come from research/evaluate.py.",
+  "best_epoch": 18
+}

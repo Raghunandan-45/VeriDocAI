@@ -89,6 +89,23 @@ before you commit.
 **Out of memory:** lower `BATCH_SIZE`. It must stay divisible by `train.crops_per_visit`
 (4), e.g. 12 or 8.
 
+## 2b. Run 2 (the single approved retrain)
+
+Run 2 uses `configs/train_run2.yaml`. It is identical to `configs/train.yaml` (run 1) except
+for four settings: per-crop Dice, a validation subset stratified by manipulation type,
+checkpoint selection by macro F1, and 20 epochs with the cosine schedule spanning all 20.
+`configs/train.yaml` still reproduces run 1.
+
+Cell 4 is already set for run 2: `TRAIN_CONFIG = "configs/train_run2.yaml"`, `RUN_NAME = "run2"`, and
+`EPOCHS = None` so the 20 epochs come from the config. Outputs go to `/kaggle/working/run2`, and
+cell 5 writes `/kaggle/working/veridoc_artifacts_run2.zip`. Unzip it locally into
+`artifacts/run2/` so that run 1 in `artifacts/` stays untouched. Then run:
+```bash
+.venv/bin/python -m research.verify_artifacts --dir artifacts/run2 --out results/artifacts_verification_run2.json
+.venv/bin/python -m research.evaluate --method model --checkpoint artifacts/run2/best.pt --split val \
+       --out results/val_model_run2.json --frozen-out results/frozen_config_run2.json
+```
+
 ## 3. Fallback: no Internet for pretrained weights
 
 1. On a machine with Internet, download torchvision's ImageNet ResNet-18 weights file

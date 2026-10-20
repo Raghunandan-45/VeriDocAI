@@ -1,7 +1,8 @@
 # VeriDoc AI: document tampering localization (prototype)
 
-> Status: Phase 3 done (U-Net trained on Kaggle, validated locally, thresholds frozen on
-> validation). No test-split results exist yet (Phase 4).
+> Status: Phase 3 done. Two U-Net runs were trained on Kaggle and validated locally. Run 2
+> was chosen on validation by a rule fixed before it was trained (`results/final_model.json`).
+> No test-split results exist yet (Phase 4).
 
 VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
 a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
@@ -255,14 +256,14 @@ sha256 of every downloaded file was re-checked locally (`results/artifacts_verif
 - `best.pt` is the epoch-8 checkpoint. It loads and runs on CPU (about 23.5 s for one 1906×1348
   page at stride 128).
 
-### U-Net vs ELA on validation
+### U-Net run 1 (baseline) vs ELA on validation
 
 **Synthetic data. Thresholds and score rules were selected on these same validation pages, so
 every number here is optimistic.** The frozen held-out test results come in Phase 4.
 Sources: `results/val_model.json`, `results/val_ela.json`, `results/val_comparison.csv`,
 `results/frozen_config.json`. 180 pages (120 tampered, 60 authentic), 95% bootstrap CIs.
 
-| Metric | ELA | U-Net (epoch 8) |
+| Metric | ELA | U-Net run 1 (epoch 8) |
 |---|---|---|
 | Pixel threshold (val-selected) | 0.144 | 0.867 |
 | Pooled pixel F1 | 0.020 [0.015, 0.026] | 0.602 [0.521, 0.668] |
@@ -274,7 +275,7 @@ Sources: `results/val_model.json`, `results/val_ela.json`, `results/val_comparis
 
 The pixel scores and the image risk score are model scores, **not calibrated probabilities**.
 
-**Breakdown for the U-Net.** Each tampered group is scored against all 60 authentic pages for AUC.
+**Breakdown for U-Net run 1.** Each tampered group is scored against all 60 authentic pages for AUC.
 
 | Tampered group | n | Pooled pixel F1 | Per-image F1 | Image AUC |
 |---|---|---|---|---|
@@ -294,6 +295,68 @@ What this shows, on synthetic data only:
   authentic pages are flagged, because the model gives some high pixel scores on untouched
   pages: 37% of authentic pages have at least one pixel above the pixel threshold
   (`authentic_pages` in `results/val_model.json`).
+
+### Text-overwrite diagnosis and run 2
+
+Run 1 above is the **baseline**. The diagnosis used no GPU and no test data
+(`research/diagnose_overwrite.py`; files `results/diag_overwrite_*.json`).
+- **Missed even on training pages.** Overwrites are missed on 25 of 30 sampled training pages
+  too, so the model underfits them.
+- **Crops are balanced, pixels are not.** Overwrites make up 49% of positive training crops but
+  only 11% of positive pixels. The Dice loss was computed over the whole batch, so they got
+  little weight.
+- **The selection metric could not see them.** The per-epoch selection subset was 92% splice
+  pixels by tampered area.
+- **Scores inside missed edits are near zero** (median maximum 0.010 on validation).
+
+**Run 2** is the single approved retrain: **per-crop Dice + stratified selection + 20 epochs**
+(`configs/train_run2.yaml`). Three settings change at once, so any difference from run 1 is
+the effect of the combination, not of one change alone.
+
+Decision rule, fixed before training, validation only: the final model is the run with the
+higher full-validation macro pooled F1, the mean of splice F1 and overwrite F1 at that run's
+frozen threshold. For run 1 that is (0.667 + 0.068) / 2 = 0.368. Results were to be reported
+whether or not run 2 helped.
+
+**Run 2 result.** Training: 20 epochs at about 97 s each, logs in `results/kaggle_run2/`, file
+hashes verified in `results/artifacts_verification_run2.json`. The best checkpoint is epoch 18,
+selected by val-subset macro F1.
+
+**Synthetic validation; thresholds selected on these same pages, so optimistic.** Source:
+`results/val_comparison.csv` (from `results/val_ela.json`, `results/val_model.json`,
+`results/val_model_run2.json`). 95% bootstrap CIs.
+
+| Metric | ELA | Run 1 (baseline) | Run 2 |
+|---|---|---|---|
+| Pixel threshold (val-selected) | 0.144 | 0.867 | 0.880 |
+| **Macro pooled F1 (decision metric)** | 0.028 | 0.368 | **0.461** |
+| Pooled pixel F1, splice | 0.043 | 0.667 [0.587, 0.739] | 0.669 [0.574, 0.743] |
+| Pooled pixel F1, text overwrite | 0.013 | 0.068 [0.000, 0.142] | 0.254 [0.155, 0.353] |
+| └ easy | 0.013 | 0.112 | 0.236 [0.117, 0.383] |
+| └ hard | 0.013 | 0.000 | 0.276 [0.135, 0.417] |
+| Pooled pixel F1, all pages | 0.020 | 0.602 [0.521, 0.668] | 0.590 [0.505, 0.659] |
+| Per-image pixel F1 (tampered pages) | 0.031 | 0.304 [0.235, 0.369] | 0.382 [0.322, 0.445] |
+| Image AUC (val-selected rule: ELA max, U-Net runs mean of top 500) | 0.507 | 0.704 [0.628, 0.775] | 0.725 [0.652, 0.793] |
+| Image AUC, splice vs authentic | 0.503 | 0.922 [0.858, 0.971] | 0.855 [0.773, 0.918] |
+| Image AUC, overwrite vs authentic | 0.510 | 0.486 [0.380, 0.593] | 0.594 [0.492, 0.691] |
+| Val FPR at the frozen 90%-recall image threshold | 0.87 | 0.77 [0.67, 0.87] | 0.75 [0.63, 0.85] |
+| Authentic pages with any pixel above the pixel threshold | 0.97 | 0.37 | **0.88** |
+
+**Decision (`research/select_final.py` → `results/final_model.json`):** run 2 has the higher
+macro pooled F1 (0.461 vs 0.368), so **run 2 is the final model**. Phase 4 uses
+`results/frozen_config_run2.json`.
+
+How to read it (synthetic data only):
+- **Combined effect, not one change.** Run 2 (**per-crop Dice + stratified selection + 20 epochs**)
+  improved text-overwrite localisation: pooled F1 rose from 0.068 to 0.254, and hard overwrites
+  rose from 0.000 to 0.276. The CIs of the two runs do not overlap for overwrites. Three
+  settings changed at once, so this cannot be attributed to any single one.
+- **Splice localisation is unchanged** (0.667 vs 0.669).
+- **Costs.** Run 2 marks at least one pixel above the threshold on 88% of authentic pages,
+  against 37% for run 1. Its splice image AUC is lower (0.855 vs 0.922). The image-level
+  operating point is still poor for both runs: about 75% of authentic pages are flagged at
+  90% recall.
+- **Overwrites are still mostly missed.** An F1 of 0.25 is well below splices.
 
 See `docs/FONTS.md` for fonts and licenses. Sections on the model results,
 limitations, privacy and deployment are added as later phases complete.

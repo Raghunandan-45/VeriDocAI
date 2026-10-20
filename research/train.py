@@ -73,33 +73,87 @@ def collate_visits(batch):
     return torch.cat([b[0] for b in batch]), torch.cat([b[1] for b in batch])
 
 
-def val_subset(records: list[dict], n: int, seed: int) -> list[dict]:
-    """Fixed subset: n/3 authentic + 2n/3 tampered validation pages, chosen by seed."""
+TAMPER_TYPES = ("splice", "text_overwrite")
+
+
+def val_subset(records: list[dict], n: int, seed: int, mode: str = "random") -> list[dict]:
+    """Fixed per-epoch validation subset, chosen by seed.
+
+    mode "random" (run 1): n/3 authentic + 2n/3 tampered pages, tampered drawn regardless of type.
+    mode "stratified_type" (run 2): n/3 authentic, n/3 splice, n/3 text-overwrite pages, so the
+    selection metric sees both manipulation types equally often."""
     rng = np.random.default_rng([seed, 4242])
-    auth = sorted([r for r in records if r["image_label"] == 0], key=lambda r: r["sample_id"])
-    tam = sorted([r for r in records if r["image_label"] == 1], key=lambda r: r["sample_id"])
-    na = min(len(auth), n // 3)
-    nt = min(len(tam), n - na)
-    pick = [auth[i] for i in rng.choice(len(auth), na, replace=False)] + \
-           [tam[i] for i in rng.choice(len(tam), nt, replace=False)]
-    return sorted(pick, key=lambda r: r["sample_id"])
+    by_id = lambda rs: sorted(rs, key=lambda r: r["sample_id"])  # noqa: E731
+    auth = by_id([r for r in records if r["image_label"] == 0])
+    if mode == "random":
+        tam = by_id([r for r in records if r["image_label"] == 1])
+        na = min(len(auth), n // 3)
+        groups = [(auth, na), (tam, min(len(tam), n - na))]
+    elif mode == "stratified_type":
+        groups = [(auth, n // 3)] + [(by_id([r for r in records if r["manipulation_type"] == t]), n // 3)
+                                     for t in TAMPER_TYPES]
+        groups = [(g, min(len(g), k)) for g, k in groups]
+    else:
+        raise ValueError(f"unknown val.subset_mode {mode!r}")
+    pick = [g[i] for g, k in groups for i in rng.choice(len(g), k, replace=False)]
+    return by_id(pick)
 
 
 # --- loss / validation ------------------------------------------------------------------------
-def bce_dice_loss(logits, target, bce_w=1.0, dice_w=1.0, eps=1.0):
-    """BCE-with-logits + soft Dice (computed over the whole batch). Returns (total, bce, dice)."""
+def bce_dice_loss(logits, target, bce_w=1.0, dice_w=1.0, eps=1.0, mode="batch"):
+    """BCE-with-logits + soft Dice. Returns (total, bce, dice).
+
+    mode "batch" (run 1): one Dice over all pixels of the batch, so crops with large edits
+    dominate it. mode "per_crop" (run 2): Dice per crop, averaged over the crops that contain
+    at least one tampered pixel, so a small text-overwrite crop counts as much as a large
+    splice crop. Negative crops are handled by BCE in both modes."""
     bce = F.binary_cross_entropy_with_logits(logits, target)
-    p = torch.sigmoid(logits)
-    dice = 1.0 - (2.0 * (p * target).sum() + eps) / (p.sum() + target.sum() + eps)
+    if mode == "batch":
+        p = torch.sigmoid(logits)
+        dice = 1.0 - (2.0 * (p * target).sum() + eps) / (p.sum() + target.sum() + eps)
+    elif mode == "per_crop":
+        p, t = torch.sigmoid(logits.float()), target.float()
+        dims = tuple(range(1, p.dim()))
+        per = 1.0 - (2.0 * (p * t).sum(dims) + eps) / (p.sum(dims) + t.sum(dims) + eps)
+        has = t.sum(dims) > 0
+        dice = per[has].mean() if bool(has.any()) else p.sum() * 0.0
+    else:
+        raise ValueError(f"unknown train.dice_mode {mode!r}")
     return bce_w * bce + dice_w * dice, bce, dice
 
 
+def type_f1_curves(pos, neg, types) -> dict:
+    """Pooled F1 curve per manipulation type, each over that type's pages PLUS all authentic
+    pages (so false positives on authentic pages count for both)."""
+    pos, neg, types = np.asarray(pos), np.asarray(neg), np.asarray(types)
+    out = {}
+    for t in TAMPER_TYPES:
+        sel = (types == t) | (types == "none")
+        if (types == t).any():
+            out[t] = f1_curve(pos[sel].sum(0), neg[sel].sum(0))
+    return out
+
+
+def macro_selection(curves: dict, n_bins: int) -> dict:
+    """One shared threshold maximising the mean of the per-type F1 curves (macro F1).
+    Returns None values when a type is missing from the pages."""
+    if set(curves) != set(TAMPER_TYPES):
+        return {"macro_f1": None, "macro_threshold": None, "f1_splice": None, "f1_overwrite": None}
+    macro = (curves["splice"] + curves["text_overwrite"]) / 2.0
+    k = int(np.argmax(macro))
+    return {"macro_f1": float(macro[k]), "macro_threshold": k / n_bins,
+            "f1_splice": float(curves["splice"][k]), "f1_overwrite": float(curves["text_overwrite"][k])}
+
+
 def validate(model, records, data_root, stride, eval_cfg, n_bins, device, amp) -> dict:
-    """Full-page validation: best pooled pixel F1 over all thresholds (threshold-free model
-    selection metric) and image ROC-AUC of the max-probability score."""
+    """Full-page validation (threshold-free model-selection metrics):
+    - best pooled pixel F1 over all thresholds (run 1 selection metric),
+    - macro F1: best mean of the splice and text-overwrite pooled F1 at one shared threshold
+      (run 2 selection metric), with the two per-type F1 values at that threshold,
+    - image ROC-AUC of the max-probability score."""
     predict_fn = make_predict_fn(model, device, amp)
     t = eval_cfg["tiling"]
-    pos, neg, smax, labels = [], [], [], []
+    pos, neg, smax, labels, types = [], [], [], [], []
     for r in records:
         img = load_rgb(Path(data_root) / r["image_path"])
         gt = load_mask(Path(data_root) / r["mask_path"])
@@ -110,10 +164,15 @@ def validate(model, records, data_root, stride, eval_cfg, n_bins, device, amp) -
         neg.append(n)
         smax.append(float(prob.max()))
         labels.append(int(r["image_label"]))
+        types.append(r.get("manipulation_type") or "none")
     curve = f1_curve(np.sum(pos, 0), np.sum(neg, 0))
     k = int(np.argmax(curve))
     return {"best_pooled_f1": float(curve[k]), "best_threshold": k / n_bins,
+            **macro_selection(type_f1_curves(pos, neg, types), n_bins),
             "auc_max": roc_auc(labels, smax), "n_pages": len(records), "stride": stride}
+
+
+SELECT_METRICS = {"pooled_f1": ("best_pooled_f1", "best_threshold"), "macro_f1": ("macro_f1", "macro_threshold")}
 
 
 # --- helpers -----------------------------------------------------------------------------------
@@ -175,7 +234,8 @@ def smoke(cfg, crops_cfg, data_root, out_dir, device, amp, encoder_weights) -> d
     for step in range(sc["steps"]):
         opt.zero_grad(set_to_none=True)
         with torch.autocast(device_type=device.split(":")[0], dtype=torch.float16, enabled=amp):
-            loss, bce, dice = bce_dice_loss(model(x), y, cfg["train"]["bce_weight"], cfg["train"]["dice_weight"])
+            loss, bce, dice = bce_dice_loss(model(x), y, cfg["train"]["bce_weight"], cfg["train"]["dice_weight"],
+                                            mode=cfg["train"].get("dice_mode", "batch"))
         scaler.scale(loss).backward()
         scaler.step(opt)
         scaler.update()
@@ -252,7 +312,14 @@ def main(argv=None):
     visits_per_batch = tr["batch_size"] // k
     train_recs = read_manifest(data_root / "manifests" / "train.jsonl")
     val_recs = read_manifest(data_root / "manifests" / "val.jsonl")
-    subset = val_subset(val_recs, cfg["val"]["subset_pages"], cfg["seed"])
+    subset = val_subset(val_recs, cfg["val"]["subset_pages"], cfg["seed"], cfg["val"].get("subset_mode", "random"))
+    select = cfg["val"].get("select_metric", "pooled_f1")
+    if select not in SELECT_METRICS:
+        sys.exit(f"unknown val.select_metric {select!r}; choose from {sorted(SELECT_METRICS)}")
+    sel_key, sel_thr_key = SELECT_METRICS[select]
+    dice_mode = tr.get("dice_mode", "batch")
+    print(f"dice_mode: {dice_mode} | val subset: {cfg['val'].get('subset_mode', 'random')} "
+          f"({len(subset)} pages) | select_metric: {select} | epochs: {tr['epochs']}")
     ds = VisitDataset(train_recs, data_root, crops_cfg, tr["visits_per_epoch"], k, cfg["seed"], tr["page_cache"])
     steps_per_epoch = len(ds) // visits_per_batch
     if a.max_steps_per_epoch:
@@ -276,9 +343,16 @@ def main(argv=None):
         sched.load_state_dict(ck["scheduler_state"])
         scaler.load_state_dict(ck["scaler_state"])
         start_epoch, best = ck["epoch"] + 1, ck["best_val_metric"]
-        if isinstance(sched, torch.optim.lr_scheduler.CosineAnnealingLR):
-            sched.T_max = max(total_steps, 1)  # keep the schedule length if --epochs changed
-        print(f"resumed from epoch {ck['epoch'] + 1} (best val-subset F1 so far {best:.4f})")
+        if isinstance(sched, torch.optim.lr_scheduler.CosineAnnealingLR) and sched.T_max != max(total_steps, 1):
+            # --epochs changed: stretch the schedule to the new length. The scheduler updates the
+            # LR recursively from its previous value, so also reset the current LR to the
+            # closed-form cosine value at this step (otherwise an LR that already hit 0 stays 0).
+            sched.T_max = max(total_steps, 1)
+            t = min(sched.last_epoch, sched.T_max)
+            for g, base in zip(opt.param_groups, sched.base_lrs):
+                g["lr"] = sched.eta_min + (base - sched.eta_min) * (1 + np.cos(np.pi * t / sched.T_max)) / 2
+            sched._last_lr = [g["lr"] for g in opt.param_groups]
+        print(f"resumed from epoch {ck['epoch'] + 1} (best val-subset {select} so far {best:.4f})")
 
     used = {"train_config": cfg, "crops": crops_cfg, "tiling": eval_cfg["tiling"], "analysis": eval_cfg["analysis"],
             "environment": environment(device), "amp": amp, "steps_per_epoch": steps_per_epoch,
@@ -287,7 +361,8 @@ def main(argv=None):
     shutil.copy(resolve(cfg["data_config"]), out_dir / "data_config.yaml")
     metrics_path = out_dir / "metrics.csv"
     fields = ["epoch", "steps", "train_loss", "train_bce", "train_dice", "val_subset_best_f1",
-              "val_subset_best_threshold", "val_subset_auc_max", "lr_end", "epoch_seconds"]
+              "val_subset_best_threshold", "val_subset_macro_f1", "val_subset_macro_threshold",
+              "val_subset_f1_splice", "val_subset_f1_overwrite", "val_subset_auc_max", "lr_end", "epoch_seconds"]
     if not metrics_path.exists():
         with open(metrics_path, "w", newline="") as f:
             csv.DictWriter(f, fieldnames=fields).writeheader()
@@ -305,7 +380,7 @@ def main(argv=None):
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.split(":")[0], dtype=torch.float16, enabled=amp):
-                loss, bce, dice = bce_dice_loss(model(x), y, tr["bce_weight"], tr["dice_weight"])
+                loss, bce, dice = bce_dice_loss(model(x), y, tr["bce_weight"], tr["dice_weight"], mode=dice_mode)
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
@@ -318,22 +393,27 @@ def main(argv=None):
         v = validate(model, subset, data_root, cfg["val"]["subset_stride"], eval_cfg, cfg["val"]["n_bins"], device, amp)
         row = {"epoch": epoch + 1, "steps": n, "train_loss": float(sums[0] / max(n, 1)),
                "train_bce": float(sums[1] / max(n, 1)), "train_dice": float(sums[2] / max(n, 1)), "val_subset_best_f1": v["best_pooled_f1"],
-               "val_subset_best_threshold": v["best_threshold"], "val_subset_auc_max": v["auc_max"],
+               "val_subset_best_threshold": v["best_threshold"], "val_subset_macro_f1": v["macro_f1"],
+               "val_subset_macro_threshold": v["macro_threshold"], "val_subset_f1_splice": v["f1_splice"],
+               "val_subset_f1_overwrite": v["f1_overwrite"], "val_subset_auc_max": v["auc_max"],
                "lr_end": sched.get_last_lr()[0], "epoch_seconds": round(time.time() - t0, 1)}
         with open(metrics_path, "a", newline="") as f:
             csv.DictWriter(f, fieldnames=fields).writerow(row)
         print("epoch summary:", {k2: (round(v2, 5) if isinstance(v2, float) else v2) for k2, v2 in row.items()},
               flush=True)
-        improved = v["best_pooled_f1"] > best
-        best = max(best, v["best_pooled_f1"])
+        if v[sel_key] is None:
+            sys.exit(f"select_metric {select} needs both manipulation types in the validation subset")
+        improved = v[sel_key] > best
+        best = max(best, v[sel_key])
         torch.save({"model_state": model.state_dict(), "optimizer_state": opt.state_dict(),
                     "scheduler_state": sched.state_dict(), "scaler_state": scaler.state_dict(),
                     "epoch": epoch, "best_val_metric": best, "arch": ARCH, "train_config": cfg}, last_path)
         if improved:
-            save_checkpoint(best_path, model, epoch=epoch + 1, val_metric="val_subset_best_pooled_f1",
-                            val_value=v["best_pooled_f1"], val_subset_threshold=v["best_threshold"],
+            save_checkpoint(best_path, model, epoch=epoch + 1,
+                            val_metric="val_subset_best_pooled_f1" if select == "pooled_f1" else f"val_subset_{select}",
+                            val_value=v[sel_key], val_subset_threshold=v[sel_thr_key],
                             train_config=cfg)
-            print(f"new best checkpoint (val-subset F1 {best:.4f}) -> {best_path}")
+            print(f"new best checkpoint (val-subset {select} {best:.4f}) -> {best_path}")
 
     if not a.skip_final_val and best_path.exists():
         ck = torch.load(best_path, map_location=device, weights_only=True)

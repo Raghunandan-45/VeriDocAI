@@ -22,6 +22,7 @@ train:
   scheduler: cosine                # cosine | none (per optimisation step)
   bce_weight: 1.0
   dice_weight: 1.0
+  dice_mode: batch                 # batch (run 1: one Dice over the whole batch) | per_crop (run 2)
   amp: true                        # mixed precision on GPU only
   num_workers: 4
   page_cache: 2                    # pages cached per DataLoader worker (~30 MB each)
@@ -29,6 +30,8 @@ train:
 
 val:
   subset_pages: 36                 # fixed per-epoch subset (12 authentic + 24 tampered)
+  subset_mode: random              # random (run 1: tampered pages of any type) | stratified_type (run 2)
+  select_metric: pooled_f1         # pooled_f1 (run 1) | macro_f1 (run 2: mean of splice and overwrite F1)
   subset_stride: 256               # coarser stride for speed during training
   final_stride: 128                # full validation of the best checkpoint at the end
   n_bins: 1000
