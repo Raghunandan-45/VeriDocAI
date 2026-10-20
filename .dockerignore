@@ -1,0 +1,26 @@
+# Keep the build context small and free of data, weights and secrets.
+# The Dockerfile COPYs only src/docforge, serving, two configs and one frozen config.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+data
+artifacts
+*.pt
+*.pth
+*.zip
+*.zip:Zone.Identifier
+**/*:Zone.Identifier
+.env
+.env.*
+configs/local.yaml
+kaggle.json
+CLAUDE.md
+results
+!results/frozen_config_run2.json
+docs
+assets
+research
+tests

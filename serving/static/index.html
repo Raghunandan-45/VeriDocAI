@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VeriDoc AI prototype</title>
+<style>
+  :root { --bg: #f6f6f3; --fg: #1d1d1b; --muted: #5d5d58; --card: #ffffff; --line: #d9d8d2;
+          --warn-bg: #fff4dc; --warn-line: #e0b14a; --accent: #2b5fa8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ecebe6; --muted: #a3a29b; --card: #20201e; --line: #3a3a36;
+            --warn-bg: #3a2f17; --warn-line: #a07a2a; --accent: #7fa6e0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  form { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: progress; }
+  #status { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  figure { margin: 0; }
+  figure img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; display: block; }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  .score { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .hidden { display: none; }
+  .err { color: #b3261e; }
+  @media (prefers-color-scheme: dark) { .err { color: #f2b8b5; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>VeriDoc AI: tampering localisation (research prototype)</h1>
+  <p class="sub">Upload a document image (JPEG or PNG, at most 10 MB). The image is processed in memory and not stored.</p>
+
+  <div class="card warn" id="limits-static">
+    <strong>Read this first.</strong> This model was trained and evaluated on synthetic documents only.
+    It gives <strong>no tampered/authentic verdict</strong>: highlighted regions are places to inspect, and a
+    page without highlights is not shown to be unedited. The full limitations text returned by the API is shown with each result.
+  </div>
+
+  <div class="card">
+    <form id="form">
+      <input type="file" id="file" name="file" accept="image/jpeg,image/png" required>
+      <button type="submit" id="go">Analyze</button>
+      <span id="status" role="status"></span>
+    </form>
+  </div>
+
+  <section id="result" class="hidden">
+    <div class="card">
+      <div>Experimental risk score</div>
+      <div class="score" id="score"></div>
+      <div class="sub" id="score-note"></div>
+    </div>
+    <div class="grid">
+      <figure class="card"><img id="overlay" alt="Page with high-score areas tinted, predicted pixels outlined in magenta and region boxes in red">
+        <figcaption>Overlay: tint = score, magenta = pixels above the frozen threshold, red boxes = regions</figcaption></figure>
+      <figure class="card"><img id="heatmap" alt="Pixel score heatmap">
+        <figcaption>Heatmap: blue = low score, red = high score</figcaption></figure>
+    </div>
+    <div class="card">
+      <strong id="regions-title"></strong>
+      <table id="regions"><thead><tr><th>#</th><th>Box [x0, y0, x1, y1]</th><th>Area (px)</th><th>Max score</th><th>Mean score</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card warn"><strong>Limitations</strong><p id="limitations"></p></div>
+    <div class="card"><details><summary>Settings and timing</summary><pre id="settings"></pre></details></div>
+  </section>
+</main>
+<script>
+const MAX_BYTES = 10 * 1024 * 1024;
+const $ = (id) => document.getElementById(id);
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = $("file").files[0];
+  if (!f) return;
+  if (f.size > MAX_BYTES) { show_error("The file is larger than 10 MB."); return; }
+  $("go").disabled = true; $("status").textContent = "Analyzing (CPU inference can take several seconds)...";
+  $("status").classList.remove("err");
+  try {
+    const body = new FormData(); body.append("file", f);
+    const r = await fetch("/v1/analyze", { method: "POST", body });
+    const data = await r.json();
+    if (!r.ok) { show_error((data.error && data.error.message) || data.detail || ("HTTP " + r.status)); return; }
+    render(data); $("status").textContent = "";
+  } catch (e) { show_error("Request failed: " + e); }
+  finally { $("go").disabled = false; }
+});
+function show_error(msg) { $("status").textContent = msg; $("status").classList.add("err"); }
+function render(d) {
+  $("score").textContent = d.risk_score.value.toFixed(3) + " (experimental)";
+  $("score-note").textContent = d.risk_score.note;
+  $("overlay").src = "data:image/jpeg;base64," + d.overlay_jpeg_base64;
+  $("heatmap").src = "data:image/png;base64," + d.heatmap_png_base64;
+  $("regions-title").textContent = d.n_regions + " predicted region(s)" + (d.regions_truncated ? " (showing the first " + d.regions.length + ")" : "");
+  const tb = $("regions").querySelector("tbody"); tb.textContent = "";
+  d.regions.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    [i + 1, "[" + r.bbox_xyxy.join(", ") + "]", r.area_px, r.max_score.toFixed(3), r.mean_score.toFixed(3)]
+      .forEach((v) => { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); });
+    tb.appendChild(tr);
+  });
+  $("limitations").textContent = d.limitations;
+  $("settings").textContent = JSON.stringify({ image: d.image, settings: d.settings, timing_ms: d.timing_ms }, null, 2);
+  $("result").classList.remove("hidden");
+}
+</script>
+</body>
+</html>

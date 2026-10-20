@@ -1,0 +1,29 @@
+group,metric,ela,ela_ci95,model_run2,model_run2_ci95
+all,pooled pixel F1,0.0231,"[0.0170, 0.0299]",0.5365,"[0.4523, 0.6083]"
+all,pooled pixel IoU,0.0117,,0.3666,
+all,per-image pixel F1 (tampered),0.0349,"[0.0268, 0.0454]",0.3765,"[0.3106, 0.4402]"
+all,image AUC (vs all authentic),0.4842,"[0.3942, 0.5782]",0.6958,"[0.6211, 0.7728]"
+all,recall at frozen image threshold,0.95,"[0.9083, 0.9833]",0.9417,"[0.9000, 0.9833]"
+splice,pooled pixel F1,0.0526,"[0.0398, 0.0660]",0.6185,"[0.5265, 0.6974]"
+splice,pooled pixel IoU,0.027,,0.4477,
+splice,per-image pixel F1 (tampered),0.0564,"[0.0413, 0.0734]",0.592,"[0.5067, 0.6629]"
+splice,image AUC (vs all authentic),0.4703,"[0.3631, 0.5684]",0.8669,"[0.7902, 0.9338]"
+splice,recall at frozen image threshold,0.9667,"[0.9167, 1.0000]",0.9667,"[0.9167, 1.0000]"
+text overwrite,pooled pixel F1,0.011,"[0.0083, 0.0142]",0.1871,"[0.0974, 0.2884]"
+text overwrite,pooled pixel IoU,0.0055,,0.1032,
+text overwrite,per-image pixel F1 (tampered),0.0135,"[0.0098, 0.0174]",0.161,"[0.1040, 0.2252]"
+text overwrite,image AUC (vs all authentic),0.4981,"[0.3982, 0.6014]",0.5247,"[0.4172, 0.6290]"
+text overwrite,recall at frozen image threshold,0.9333,"[0.8667, 0.9833]",0.9167,"[0.8500, 0.9833]"
+overwrite easy,pooled pixel F1,0.0092,"[0.0061, 0.0137]",0.2741,"[0.1194, 0.4160]"
+overwrite easy,pooled pixel IoU,0.0046,,0.1588,
+overwrite easy,per-image pixel F1 (tampered),0.012,"[0.0075, 0.0173]",0.1953,"[0.0983, 0.2918]"
+overwrite easy,image AUC (vs all authentic),0.5444,"[0.4112, 0.6640]",0.5122,"[0.3743, 0.6339]"
+overwrite easy,recall at frozen image threshold,0.9333,"[0.8333, 1.0000]",0.9,"[0.7667, 1.0000]"
+overwrite hard,pooled pixel F1,0.0129,"[0.0087, 0.0180]",0.0989,"[0.0459, 0.1786]"
+overwrite hard,pooled pixel IoU,0.0065,,0.052,
+overwrite hard,per-image pixel F1 (tampered),0.0149,"[0.0093, 0.0214]",0.1266,"[0.0611, 0.2050]"
+overwrite hard,image AUC (vs all authentic),0.4517,"[0.3233, 0.5795]",0.5372,"[0.4160, 0.6605]"
+overwrite hard,recall at frozen image threshold,0.9333,"[0.8333, 1.0000]",0.9333,"[0.8333, 1.0000]"
+authentic,FPR at frozen image threshold (ela),0.85,"[0.7667, 0.9333]",,
+authentic,FPR at frozen image threshold (model_run2),,,0.9167,"[0.8333, 0.9833]"
+config,frozen pixel threshold / score rule,0.144 / max,,0.88 / top_k_mean,

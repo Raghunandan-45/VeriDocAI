@@ -1,0 +1,106 @@
+{
+  "image": "veridoc-api:0.5",
+  "image_id": "sha256:9c14a16be050cd7d7522705c37ca5a2097ad3f287700c86ea5e6d5430b425ecc",
+  "created": "2026-10-20T11:56:05.335671059Z",
+  "image_size_bytes": 380196700,
+  "docker_version": "29.3.1",
+  "torch_in_image": "2.14.1+cpu False",
+  "sklearn_in_image": "absent",
+  "network_inside_container": "unreachable: gaierror",
+  "probe": {
+    "health": {
+      "http_status": 200,
+      "status": "ok",
+      "model_loaded": true,
+      "settings": {
+        "pixel_threshold": 0.88,
+        "score_rule": "top_k_mean",
+        "top_k": 500,
+        "tile": 256,
+        "stride": 128,
+        "stride_used_in_test_evaluation": 128,
+        "analysis_max_side": 2000,
+        "checkpoint_sha256": "4fdae75a79754102787fe037aa22bd623954ae3eeb93eef800028a3f4fd119d4",
+        "checkpoint_epoch": 18,
+        "torch_threads": 6
+      },
+      "error": null
+    },
+    "analyze_page": {
+      "status": 200,
+      "n_regions": 2,
+      "regions": [
+        {
+          "bbox_xyxy": [
+            41,
+            1206,
+            232,
+            1286
+          ],
+          "area_px": 13857,
+          "max_score": 0.9993,
+          "mean_score": 0.9813
+        },
+        {
+          "bbox_xyxy": [
+            950,
+            704,
+            998,
+            721
+          ],
+          "area_px": 372,
+          "max_score": 0.9407,
+          "mean_score": 0.9071
+        }
+      ],
+      "risk_score": {
+        "value": 0.999,
+        "label": "experimental",
+        "note": "Experimental score: the mean of the 500 highest pixel scores. It is not a calibrated probability, no threshold is applied to it, and it is not reliable as a screening filter (see limitations)."
+      },
+      "keys": [
+        "display_size",
+        "heatmap_png_base64",
+        "image",
+        "limitations",
+        "n_regions",
+        "overlay_jpeg_base64",
+        "predicted_area_fraction",
+        "regions",
+        "regions_note",
+        "regions_truncated",
+        "request_id",
+        "risk_score",
+        "settings",
+        "timing_ms"
+      ],
+      "timing_ms": {
+        "decode": 32.9,
+        "inference": 12469.2,
+        "postprocess": 301.5
+      }
+    },
+    "non_image": {
+      "status": 415,
+      "error": {
+        "code": "unsupported_or_malformed",
+        "message": "The file is not a readable JPEG or PNG image."
+      }
+    },
+    "oversize_11MB": {
+      "status": 413,
+      "body": ""
+    }
+  },
+  "container_log_tail": [
+    "INFO:     127.0.0.1:46138 - \"POST /v1/analyze HTTP/1.1\" 415 Unsupported Media Type",
+    "INFO:     127.0.0.1:46142 - \"POST /v1/analyze HTTP/1.1\" 413 Request Entity Too Large",
+    "INFO:     Started server process [1]",
+    "INFO:     Waiting for application startup.",
+    "INFO:     Application startup complete.",
+    "INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)",
+    "2026-10-20 13:25:21,493 INFO veridoc.serving analyze rid=439619137b70 ok bytes=92439 size=1097x1552 regions=2 ms=12804",
+    "2026-10-20 13:25:21,556 INFO veridoc.serving analyze rid=fb28c7a8d55b rejected status=415 code=unsupported_or_malformed"
+  ],
+  "page": "data/generated/val/invoice_0010_splice_0.jpg"
+}

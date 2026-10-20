@@ -49,9 +49,14 @@ def is_test_split(split: str) -> bool:
     return split.startswith("test")
 
 
-def check_guard(split: str, frozen: dict | None, method: str, cfg: dict, model_info: dict | None = None) -> None:
+def check_guard(split: str, frozen: dict | None, method: str, cfg: dict, model_info: dict | None = None,
+                stride_study: bool = False) -> None:
     """Refuse test-split evaluation without a validation-frozen config, and refuse frozen
-    configs that were not selected on validation or do not match the method/parameters."""
+    configs that were not selected on validation or do not match the method/parameters.
+    `stride_study` (validation only) applies the frozen thresholds at a different stride to
+    measure the accuracy cost of faster inference; it is refused on every test split."""
+    if stride_study and (is_test_split(split) or frozen is None):
+        raise TestSetGuardError("--stride-study is validation-only and needs --frozen-config")
     if is_test_split(split) and frozen is None:
         raise TestSetGuardError(
             f"refusing to evaluate split '{split}' without --frozen-config: thresholds and score rules "
@@ -64,7 +69,7 @@ def check_guard(split: str, frozen: dict | None, method: str, cfg: dict, model_i
         if method == "ela" and frozen.get("ela") != cfg["ela"]:
             raise TestSetGuardError("ELA parameters in configs/eval.yaml differ from the frozen config")
         if method == "model" and model_info is not None:
-            for key in ("checkpoint_sha256", "stride", "max_side"):
+            for key in ("checkpoint_sha256", "max_side") + (() if stride_study else ("stride",)):
                 if frozen.get(key) != model_info[key]:
                     raise TestSetGuardError(f"frozen {key}={frozen.get(key)!r} but this run uses {model_info[key]!r}")
 
@@ -267,6 +272,8 @@ def run(argv=None) -> dict:
     ap.add_argument("--perturb", default=None, choices=["jpeg", "resize", "blur"],
                     help="robustness check: perturb each page first (needs --frozen-config)")
     ap.add_argument("--perturb-config", default="configs/robustness.yaml")
+    ap.add_argument("--stride-study", action="store_true",
+                    help="validation only: apply the frozen thresholds at --stride (latency/accuracy trade-off)")
     a = ap.parse_args(argv)
 
     cfg = load_config(a.config)
@@ -274,13 +281,13 @@ def run(argv=None) -> dict:
     if a.perturb and frozen is None:
         raise TestSetGuardError("--perturb is a robustness check of a frozen configuration; "
                                 "it needs --frozen-config and never selects thresholds")
-    check_guard(a.split, frozen, a.method, cfg)  # BEFORE any data is touched
+    check_guard(a.split, frozen, a.method, cfg, stride_study=a.stride_study)  # BEFORE any data is touched
     minfo = None
     if a.method == "model":
         if not a.checkpoint:
             ap.error("--method model needs --checkpoint")
         minfo = model_info(a.checkpoint, cfg, a.stride)
-        check_guard(a.split, frozen, a.method, cfg, minfo)
+        check_guard(a.split, frozen, a.method, cfg, minfo, stride_study=a.stride_study)
 
     data_root = resolve(a.data_root or cfg["data_root"])
     records = read_manifest(data_root / "manifests" / f"{a.split}.jsonl")
@@ -317,6 +324,10 @@ def run(argv=None) -> dict:
     else:
         result["evidence_class"] = "SYNTHETIC held-out evaluation with a validation-frozen config"
         result["frozen_config"] = frozen
+    if a.stride_study:
+        result["evidence_class"] = ("SYNTHETIC validation; stride study: thresholds frozen at stride "
+                                    f"{frozen['stride']} applied unchanged at stride {minfo['stride']}")
+        result["stride_study"] = {"frozen_stride": frozen["stride"], "stride": minfo["stride"]}
     if a.perturb:
         values = [v for st in stats for v in st["perturb_params"].values()]
         result["evidence_class"] += f"; robustness check: post-hoc perturbation '{a.perturb}', no threshold changes"

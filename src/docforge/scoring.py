@@ -19,7 +19,6 @@ import math
 from typing import Callable
 
 import numpy as np
-from sklearn.metrics import roc_auc_score
 
 SCORE_RULES = ("max", "top_k_mean", "frac_above")
 
@@ -94,6 +93,8 @@ def frac_above(pos: np.ndarray, neg: np.ndarray, k: int) -> float:
 
 
 def roc_auc(labels, scores) -> float | None:
+    from sklearn.metrics import roc_auc_score  # lazy: the serving image does not need scikit-learn
+
     labels = np.asarray(labels)
     if len(np.unique(labels)) < 2:
         return None

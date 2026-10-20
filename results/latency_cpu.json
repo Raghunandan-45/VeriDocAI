@@ -1,0 +1,102 @@
+{
+  "evidence_class": "measured on this machine; in-process HTTP requests (no network)",
+  "hardware": {
+    "cpu": "13th Gen Intel(R) Core(TM) i5-1335U",
+    "logical_cpus": 12,
+    "torch_threads": 6,
+    "ram_gib": 7.6,
+    "os": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "python": "3.10.12",
+    "torch": "2.14.1+cpu",
+    "device": "cpu"
+  },
+  "n_pages": 20,
+  "warmup_requests": 2,
+  "pages": [
+    "invoice_0010_authentic_0",
+    "invoice_0026_authentic_0",
+    "invoice_0042_authentic_0",
+    "invoice_0060_authentic_0",
+    "invoice_0084_authentic_0",
+    "invoice_0095_authentic_0",
+    "invoice_0108_authentic_0",
+    "invoice_0130_authentic_0",
+    "invoice_0143_authentic_0",
+    "invoice_0193_authentic_0",
+    "marksheet_0001_authentic_0",
+    "marksheet_0031_authentic_0",
+    "marksheet_0051_authentic_0",
+    "marksheet_0079_authentic_0",
+    "marksheet_0086_authentic_0",
+    "marksheet_0103_authentic_0",
+    "marksheet_0125_authentic_0",
+    "marksheet_0162_authentic_0",
+    "marksheet_0171_authentic_0",
+    "marksheet_0178_authentic_0"
+  ],
+  "results": {
+    "128": {
+      "stride": 128,
+      "tile": 256,
+      "request_ms": {
+        "p50": 15669.8,
+        "p95": 22058.9,
+        "mean": 16878.9,
+        "min": 10096.5,
+        "max": 38201.9
+      },
+      "inference_ms": {
+        "p50": 15308.7,
+        "p95": 21587.8,
+        "mean": 16493.6,
+        "min": 9825.4,
+        "max": 37361.9
+      }
+    },
+    "192": {
+      "stride": 192,
+      "tile": 256,
+      "request_ms": {
+        "p50": 7443.4,
+        "p95": 11026.8,
+        "mean": 8205.1,
+        "min": 5552.8,
+        "max": 14731.8
+      },
+      "inference_ms": {
+        "p50": 7190.4,
+        "p95": 9983.0,
+        "mean": 7713.0,
+        "min": 5254.9,
+        "max": 13621.0
+      }
+    },
+    "256": {
+      "stride": 256,
+      "tile": 256,
+      "request_ms": {
+        "p50": 4478.0,
+        "p95": 6943.9,
+        "mean": 4923.7,
+        "min": 2784.7,
+        "max": 8010.5
+      },
+      "inference_ms": {
+        "p50": 4026.9,
+        "p95": 6388.6,
+        "mean": 4533.3,
+        "min": 2544.4,
+        "max": 7540.7
+      }
+    }
+  },
+  "resolution": {
+    "width_min": 996,
+    "width_max": 1452,
+    "height_min": 1409,
+    "height_max": 2054,
+    "median_megapixels": 2.16,
+    "analysis_max_side": 2000,
+    "n_pages_downscaled_to_cap": 3
+  }
+}

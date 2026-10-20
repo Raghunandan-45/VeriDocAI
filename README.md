@@ -1,9 +1,9 @@
 # VeriDoc AI: document tampering localization (prototype)
 
-> Status: Phase 4 done. The final model (run 2) was evaluated once on the held-out synthetic
+> Status: Phase 5 done. The final model (run 2) was evaluated once on the held-out synthetic
 > test split, with the validation-frozen config: pooled pixel F1 0.537, image AUC 0.696, but
-> **92% of authentic test pages are flagged** at the frozen threshold. A failure analysis and
-> a quick robustness check follow. The local API is Phase 5.
+> **92% of authentic test pages are flagged** at the frozen threshold. A local FastAPI app
+> (and a CPU Docker image) returns heatmaps and region boxes, never a tampered/authentic verdict.
 
 VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
 a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
@@ -386,7 +386,9 @@ config is `results/frozen_config_run2.json`:
 All three were selected on validation before any test page was scored. `results/test_model.json`
 records the dataset, eval-config and checkpoint hashes, and they match the frozen config.
 The test split was evaluated **once**. No model, threshold or rule was changed afterwards.
-ELA was not run on test.
+The ELA baseline was also evaluated once on test (at the start of Phase 5), with its own
+validation-frozen config `results/frozen_ela.json` (pixel threshold 0.144, rule max,
+image threshold 0.316) → `results/test_ela.json`.
 
 **Synthetic held-out test split** (180 pages: 60 authentic, 60 splice, 60 text overwrite;
 sources never seen in training or validation). Fictional documents, so this is not evidence
@@ -401,6 +403,22 @@ of real-world performance. 95% bootstrap CIs (1000 resamples of images). Source:
 | Image AUC (vs authentic) | 0.696 [0.621, 0.773] | 0.867 [0.790, 0.934] | 0.525 [0.417, 0.629] | 0.512 | 0.537 |
 | Recall at frozen image threshold | 0.942 [0.900, 0.983] | 0.967 | 0.917 | 0.900 | 0.933 |
 | **FPR at frozen image threshold** | **0.917 [0.833, 0.983]** | | | | |
+
+**ELA baseline vs U-Net on the same test split** (each with its own validation-frozen
+config, one run each; synthetic data). Source: `results/test_comparison.csv`, from
+`results/test_ela.json` and `results/test_model.json`.
+
+| Metric (test) | ELA | U-Net (run 2) |
+|---|---|---|
+| Pooled pixel F1, all | 0.023 [0.017, 0.030] | 0.537 [0.452, 0.608] |
+| Pooled pixel F1, splice | 0.053 | 0.618 |
+| Pooled pixel F1, text overwrite | 0.011 | 0.187 |
+| Per-image pixel F1 (tampered) | 0.035 | 0.377 |
+| Image AUC | 0.484 [0.394, 0.578] | 0.696 [0.621, 0.773] |
+| Recall / FPR at frozen image threshold | 0.950 / 0.850 | 0.942 / 0.917 |
+
+ELA stays at chance level on test (AUC 0.484), as on validation (0.507). Both methods flag
+most authentic pages at their frozen thresholds.
 
 How to read it:
 - **Splices are localised; text overwrites mostly are not.** Overwrite image AUC 0.525 is
@@ -469,5 +487,147 @@ and every explanation is labelled as a hypothesis. Main points:
 - Unseen-font, unseen-processing and hand-edited sanity tests were **not run** (stretch,
   skipped).
 
-See `docs/FONTS.md` for fonts and licenses. Sections on serving, privacy and deployment are
-added as later phases complete.
+## Local API (Phase 5)
+
+```bash
+# run locally (CPU); the checkpoint is gitignored, see "Getting the checkpoint" below
+VERIDOC_CHECKPOINT=artifacts/run2/best.pt PYTHONPATH=src:. .venv/bin/uvicorn serving.app:app --port 8000
+# open http://127.0.0.1:8000/ for the upload page, or:
+curl -F "file=@page.jpg;type=image/jpeg" http://127.0.0.1:8000/v1/analyze
+curl http://127.0.0.1:8000/health
+.venv/bin/python -m pytest -q tests/test_serving.py
+```
+
+**What it returns, and what it deliberately does not.** Phase 4 showed that the image-level
+operating point flags 92% of authentic test pages. So `POST /v1/analyze` returns **no
+tampered/authentic verdict, no risk tier and no image threshold**. It returns:
+- a pixel score heatmap (PNG) and an overlay (JPEG), both base64, downscaled to at most
+  1600 px on the long side;
+- bounding boxes of the connected regions at or above the frozen pixel threshold (0.88), in
+  original image pixels, with area and peak/mean score;
+- the risk score (mean of the top-500 pixel scores), labelled `"experimental"`, with a note
+  that it is not a calibrated probability and not a screening filter;
+- a fixed `limitations` text (`serving/limitations.py`). It says the model was evaluated on
+  synthetic data only, localises splices much better than text overwrites (test F1 0.62 vs
+  0.19), is sensitive to blur (F1 0.54 → 0.33), and that the image score flagged 92% of
+  authentic test pages. A test checks every number in it against `results/test_model.json`
+  and `results/test_model_perturb_blur.json`.
+
+**Same code as the evaluation.** The app calls `docforge.model.predict_page` (tiling, Hann
+blending, 2000 px cap) and `docforge.scoring.binarize`, with the pixel threshold and score
+rule read from `results/frozen_config_run2.json`. A test runs a real validation page through
+the serving path and checks that the risk score equals the one the evaluation recorded
+(`tests/test_serving.py::test_serving_score_matches_evaluation_on_a_real_page`).
+
+**Input checks** (`serving/validation.py`, limits in `configs/serve.yaml`, all initial
+assumptions):
+
+| Check | Response |
+|---|---|
+| Body or file over 10 MB (Content-Length or streamed) | 413 |
+| Not JPEG/PNG, judged from the bytes, not the file name or MIME type | 415 |
+| Side over 8000 px, over 40 MP, or under 32 px, read from the header before decoding | 422 |
+| Truncated or corrupt image data | 400 |
+| Checkpoint missing, or its sha256 differs from the frozen config | 503 on `/health` and `/v1/analyze` |
+
+**Privacy.**
+- Uploads stay in memory. Starlette normally spools multipart files over 1 MB to a temp file,
+  so the app raises that limit above the body limit; a test fails if a 2 MB upload touches disk.
+- Nothing is stored.
+- Logs record a request id, byte size, image size, region count and time. They never record
+  file names or content; a test checks this.
+- Responses carry `Cache-Control: no-store`.
+- EXIF orientation is not applied (as in the evaluation), so rotated phone photos are
+  analysed as stored.
+
+**Offline serving.** The model is built with `encoder_weights=None` and the trained weights are
+loaded from the local checkpoint, so no download happens at serve time. A test blocks the
+download functions while loading. The Docker check runs the container with `--network none`.
+
+### Latency and the stride trade-off
+
+```bash
+.venv/bin/python -m research.latency      # -> results/latency_cpu.json
+for st in 256 192; do .venv/bin/python -m research.evaluate --method model --split val --stride $st \
+  --stride-study --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt \
+  --out results/val_model_run2_stride$st.json; done
+```
+
+**Setup.**
+- **Hardware:** Intel Core i5-1335U laptop CPU (12 logical CPUs, torch using 6 threads),
+  7.6 GiB RAM, WSL2, torch 2.14.1+cpu, no GPU.
+- **Pages:** 20 validation pages, 996–1452 px wide and 1409–2054 px high (median 2.16 MP);
+  3 were downscaled to the 2000 px analysis cap.
+- **Method:** each page's JPEG goes through the whole API path (upload parsing, validation,
+  decode, tiled inference with tile 256, regions, image encoding) in-process, with no
+  network; 2 warm-up requests per stride. Source: `results/latency_cpu.json`.
+- **Caveat:** the stride-128 run overlapped Docker Desktop starting up and other unrelated
+  containers on the machine. Its maximum (38.2 s) is probably inflated; the p50 is less
+  affected.
+
+**Accuracy cost**, on **validation only**. The stride-128 thresholds frozen on validation
+were applied unchanged at the larger strides; the test split was not used. Sources:
+`results/val_model_run2.json`, `results/val_model_run2_stride192.json`,
+`results/val_model_run2_stride256.json`. Synthetic data.
+
+| Stride | Request p50 / p95 (s) | Pooled pixel F1 (val) [95% CI] | Splice F1 | Overwrite F1 | Image AUC | FPR at frozen threshold | Authentic pages with any predicted pixel |
+|---|---|---|---|---|---|---|---|
+| **128 (evaluated on test; default)** | 15.7 / 22.1 | 0.591 [0.505, 0.659] | 0.669 | 0.254 | 0.725 | 0.75 | 0.88 |
+| 192 | 7.4 / 11.0 | 0.558 [0.482, 0.621] | 0.646 | 0.211 | 0.695 | 0.88 | 0.97 |
+| 256 | 4.5 / 6.9 | 0.463 [0.388, 0.529] | 0.587 | 0.167 | 0.685 | 0.97 | 1.00 |
+
+- **Stride 192** is about 2× faster for a small F1 loss whose CIs overlap.
+- **Stride 256** (no tile overlap) is about 3.5× faster but loses 0.13 pooled F1, and it marks
+  pixels on every authentic validation page. A hypothesis, not tested: without overlap,
+  pixels near tile edges are predicted from one tile only, with less context.
+- **The served default stays at 128,** the only stride evaluated on test. `VERIDOC_STRIDE`
+  can change it, and `/health` then reports the stride next to
+  `stride_used_in_test_evaluation`.
+- The frozen thresholds were not re-selected for the larger strides, so these rows show the
+  cost of changing only the stride.
+
+### Docker (CPU-only)
+
+```bash
+docker build -t veridoc-api:0.5 .
+docker run --rm -p 8000:8000 \
+  -v "$PWD/artifacts/run2/best.pt:/models/best.pt:ro" \
+  -e VERIDOC_CHECKPOINT=/models/best.pt veridoc-api:0.5
+.venv/bin/python -m research.docker_check     # -> results/docker_verification.json
+```
+
+The image has these properties:
+- Base `python:3.10-slim` with `torch==2.14.1+cpu` from the PyTorch CPU index, so it holds no
+  CUDA libraries. scikit-learn, pandas and matplotlib are left out (`requirements-serve.txt`).
+- It runs as a non-root user and has a `HEALTHCHECK` on `/health`.
+- It contains **no checkpoint and no data**.
+
+Built and run on this machine (Docker 29.3.1 in WSL2). `results/docker_verification.json`
+records:
+- image size 380 MB (compressed content);
+- `torch 2.14.1+cpu`, CUDA not available;
+- with `--network none`: network unreachable inside the container, `/health` 200, analysis
+  of a validation splice page 200 (predicted box [41, 1206, 232, 1286]; ground truth
+  [39, 1209, 234, 1287]), a non-image file 415, an 11 MB upload 413.
+
+### Getting the checkpoint into the container
+
+`artifacts/run2/best.pt` (57 MB, sha256 `4fdae75a…`) is gitignored and is **not** copied
+into the image (`.dockerignore` excludes `artifacts/`). In every setup the app checks the
+file's sha256 against `results/frozen_config_run2.json` at startup, and refuses to serve on
+a mismatch, because the frozen thresholds only apply to that exact checkpoint.
+- **Local runs:** bind-mount the file read-only (`-v .../best.pt:/models/best.pt:ro`) and
+  point `VERIDOC_CHECKPOINT` at it, as above. The weights never enter an image layer, and
+  you can swap the file without rebuilding.
+- **Later deployment:** keep the weights out of git and out of public images. Two options:
+  1. Build a **private** image that adds the file in a final layer (for example
+     `FROM veridoc-api:0.5` plus `COPY best.pt /models/best.pt`). Push it only to a private
+     registry, and record the sha256 in the deployment config. This is immutable and simple.
+  2. Keep the public, model-free image and have the platform provide the file at startup:
+     a read-only volume, or a download from private object storage by an init step using
+     the platform's secret store. Never put the link or credentials in the repo.
+
+  In both cases the startup sha256 check is the integrity gate. A new model means a new
+  frozen config from validation, never a reused threshold.
+
+See `docs/FONTS.md` for fonts and licenses.

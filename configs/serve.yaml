@@ -1,0 +1,31 @@
+# Serving configuration (FastAPI app in serving/). Every numeric default is an INITIAL
+# ASSUMPTION, not a tuned value. Paths are relative to the repo root (or the image's /app).
+#
+# Environment overrides (never commit real paths or secrets here):
+#   VERIDOC_CHECKPOINT     path to the trained checkpoint (default: model.checkpoint below)
+#   VERIDOC_FROZEN_CONFIG  validation-frozen thresholds (default: model.frozen_config)
+#   VERIDOC_STRIDE         tiling stride (default: inference.stride)
+#   VERIDOC_TORCH_THREADS  torch intra-op threads (default: torch's own choice)
+
+model:
+  checkpoint: artifacts/run2/best.pt              # gitignored; see README "Getting the checkpoint"
+  frozen_config: results/frozen_config_run2.json  # pixel threshold + score rule, frozen on validation
+  eval_config: configs/eval.yaml                  # tile, window floor, batch size, analysis cap
+
+inference:
+  stride: 128          # the stride of the frozen test evaluation; larger strides were measured
+                       # on VALIDATION only (results/val_model_run2_stride*.json)
+
+upload:
+  max_bytes: 10485760          # 10 MiB per file
+  multipart_overhead: 65536    # extra request-body allowance for multipart headers
+  formats: [JPEG, PNG]         # checked from the decoded file, not the filename or MIME type
+  max_side: 8000               # decoded width/height limits, checked from the header BEFORE decoding
+  min_side: 32
+  max_pixels: 40000000
+
+output:
+  max_regions: 50              # region boxes returned (highest peak score first)
+  display_max_side: 1600       # heatmap/overlay images are downscaled to this long side
+  overlay_alpha: 0.45
+  overlay_jpeg_quality: 85

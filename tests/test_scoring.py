@@ -155,6 +155,21 @@ def test_guard_refuses_frozen_config_not_selected_on_val(eval_cfg):
     ev.check_guard("val", None, "ela", eval_cfg)  # validation may select
 
 
+def test_stride_study_is_validation_only(eval_cfg):
+    frozen = {"selected_on": "val", "method": "model", "checkpoint_sha256": "abc", "stride": 128, "max_side": 2000}
+    info = {"checkpoint_sha256": "abc", "stride": 256, "max_side": 2000}
+    with pytest.raises(ev.TestSetGuardError):           # a different stride is refused normally
+        ev.check_guard("val", frozen, "model", eval_cfg, info)
+    ev.check_guard("val", frozen, "model", eval_cfg, info, stride_study=True)
+    for split in ("test", "test_unseen", "test_robust"):
+        with pytest.raises(ev.TestSetGuardError):
+            ev.check_guard(split, frozen, "model", eval_cfg, info, stride_study=True)
+    with pytest.raises(ev.TestSetGuardError):           # needs a frozen config
+        ev.check_guard("val", None, "model", eval_cfg, stride_study=True)
+    with pytest.raises(ev.TestSetGuardError):           # still checks the checkpoint
+        ev.check_guard("val", frozen, "model", eval_cfg, {**info, "checkpoint_sha256": "x"}, stride_study=True)
+
+
 def test_cli_refuses_test_before_touching_data(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("data was read before the guard ran")

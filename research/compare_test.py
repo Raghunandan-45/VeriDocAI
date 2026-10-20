@@ -91,6 +91,35 @@ def main():
     for r in rows:
         print(r)
     print("wrote", out)
+    if resolve("results/test_ela.json").exists():
+        write_method_comparison(res["clean"], json.loads(resolve("results/test_ela.json").read_text()))
+
+
+def write_method_comparison(model: dict, ela: dict) -> None:
+    """results/test_comparison.csv: ELA vs U-Net (run 2) on the clean test split, each with
+    its own validation-frozen config, one test run each."""
+    rows = []
+    for gname, key in GROUPS[:5]:
+        pm = group_metrics(model["metrics"]["overall"] if key is None else model["metrics"]["breakdown_tampered_groups"][key])
+        pe = group_metrics(ela["metrics"]["overall"] if key is None else ela["metrics"]["breakdown_tampered_groups"][key])
+        for (mname, mv, mc), (_, ev, ec) in zip(pm, pe):
+            rows.append({"group": gname, "metric": mname, "ela": round(ev, 4), "ela_ci95": ci(ec),
+                         "model_run2": round(mv, 4), "model_run2_ci95": ci(mc)})
+    for r, name in ((ela, "ela"), (model, "model_run2")):
+        a = r["metrics"]["overall"]["at_frozen_image_threshold"]
+        rows.append({"group": "authentic", "metric": f"FPR at frozen image threshold ({name})",
+                     name: round(a["fpr"], 4), f"{name}_ci95": ci(a.get("fpr_ci"))})
+    rows.append({"group": "config", "metric": "frozen pixel threshold / score rule",
+                 "ela": f"{ela['frozen_config']['pixel_threshold']} / {ela['frozen_config']['score_rule']}",
+                 "model_run2": f"{model['frozen_config']['pixel_threshold']} / {model['frozen_config']['score_rule']}"})
+    out = resolve("results/test_comparison.csv")
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["group", "metric", "ela", "ela_ci95", "model_run2", "model_run2_ci95"])
+        w.writeheader()
+        w.writerows(rows)
+    for r in rows:
+        print(r)
+    print("wrote", out)
 
 
 if __name__ == "__main__":
