@@ -1,0 +1,424 @@
+{
+  "evidence_class": "SYNTHETIC; small groups (n per row shown); descriptive only, no CIs",
+  "model": "run2",
+  "detected_definition": "per-image TP pixels > 0 at the frozen pixel threshold",
+  "val": {
+    "by_difficulty": {
+      "easy": {
+        "n": 30,
+        "detected_frac": 0.4,
+        "mean_per_image_f1": 0.2078,
+        "pooled_f1": 0.2364,
+        "median_mask_pixels": 2003.5
+      },
+      "hard": {
+        "n": 30,
+        "detected_frac": 0.4333,
+        "mean_per_image_f1": 0.2059,
+        "pooled_f1": 0.2756,
+        "median_mask_pixels": 1929.5
+      }
+    },
+    "hard_by_imperfection": {
+      "antialias": {
+        "with": {
+          "n": 19,
+          "detected_frac": 0.5789,
+          "mean_per_image_f1": 0.272,
+          "pooled_f1": 0.3406,
+          "median_mask_pixels": 1919.0
+        },
+        "without": {
+          "n": 11,
+          "detected_frac": 0.1818,
+          "mean_per_image_f1": 0.0917,
+          "pooled_f1": 0.1575,
+          "median_mask_pixels": 2192.0
+        }
+      },
+      "ink_shift": {
+        "with": {
+          "n": 21,
+          "detected_frac": 0.5238,
+          "mean_per_image_f1": 0.229,
+          "pooled_f1": 0.2728,
+          "median_mask_pixels": 1919.0
+        },
+        "without": {
+          "n": 9,
+          "detected_frac": 0.2222,
+          "mean_per_image_f1": 0.152,
+          "pooled_f1": 0.2824,
+          "median_mask_pixels": 2192.0
+        }
+      },
+      "letter_spacing": {
+        "with": {
+          "n": 17,
+          "detected_frac": 0.2941,
+          "mean_per_image_f1": 0.1709,
+          "pooled_f1": 0.2594,
+          "median_mask_pixels": 1940.0
+        },
+        "without": {
+          "n": 13,
+          "detected_frac": 0.6154,
+          "mean_per_image_f1": 0.2517,
+          "pooled_f1": 0.3011,
+          "median_mask_pixels": 1470.0
+        }
+      },
+      "offset": {
+        "with": {
+          "n": 17,
+          "detected_frac": 0.4706,
+          "mean_per_image_f1": 0.1804,
+          "pooled_f1": 0.2359,
+          "median_mask_pixels": 1940.0
+        },
+        "without": {
+          "n": 13,
+          "detected_frac": 0.3846,
+          "mean_per_image_f1": 0.2393,
+          "pooled_f1": 0.3321,
+          "median_mask_pixels": 1470.0
+        }
+      }
+    },
+    "hard_by_number_of_imperfections": {
+      "1": {
+        "n": 8,
+        "detected_frac": 0.125,
+        "mean_per_image_f1": 0.0933,
+        "pooled_f1": 0.1756,
+        "median_mask_pixels": 2746.5
+      },
+      "2": {
+        "n": 7,
+        "detected_frac": 0.7143,
+        "mean_per_image_f1": 0.3495,
+        "pooled_f1": 0.4511,
+        "median_mask_pixels": 884.0
+      },
+      "3": {
+        "n": 8,
+        "detected_frac": 0.5,
+        "mean_per_image_f1": 0.2035,
+        "pooled_f1": 0.2837,
+        "median_mask_pixels": 1444.5
+      },
+      "4": {
+        "n": 7,
+        "detected_frac": 0.4286,
+        "mean_per_image_f1": 0.1938,
+        "pooled_f1": 0.2386,
+        "median_mask_pixels": 1940.0
+      }
+    },
+    "easy_by_mode": {
+      "both": {
+        "n": 13,
+        "detected_frac": 0.4615,
+        "mean_per_image_f1": 0.2243,
+        "pooled_f1": 0.1818,
+        "median_mask_pixels": 2064.0
+      },
+      "family": {
+        "n": 7,
+        "detected_frac": 0.2857,
+        "mean_per_image_f1": 0.1027,
+        "pooled_f1": 0.1281,
+        "median_mask_pixels": 3011.0
+      },
+      "size": {
+        "n": 10,
+        "detected_frac": 0.4,
+        "mean_per_image_f1": 0.2599,
+        "pooled_f1": 0.4068,
+        "median_mask_pixels": 643.0
+      }
+    },
+    "by_field_kind": {
+      "amount": {
+        "n": 15,
+        "detected_frac": 0.5333,
+        "mean_per_image_f1": 0.3067,
+        "pooled_f1": 0.3209,
+        "median_mask_pixels": 3824.0
+      },
+      "date": {
+        "n": 7,
+        "detected_frac": 0.4286,
+        "mean_per_image_f1": 0.1237,
+        "pooled_f1": 0.2491,
+        "median_mask_pixels": 3124.0
+      },
+      "grade": {
+        "n": 5,
+        "detected_frac": 0.4,
+        "mean_per_image_f1": 0.1056,
+        "pooled_f1": 0.0496,
+        "median_mask_pixels": 432.0
+      },
+      "id": {
+        "n": 6,
+        "detected_frac": 0.5,
+        "mean_per_image_f1": 0.306,
+        "pooled_f1": 0.3636,
+        "median_mask_pixels": 2783.5
+      },
+      "int": {
+        "n": 20,
+        "detected_frac": 0.4,
+        "mean_per_image_f1": 0.1914,
+        "pooled_f1": 0.2142,
+        "median_mask_pixels": 598.5
+      },
+      "name": {
+        "n": 4,
+        "detected_frac": 0.25,
+        "mean_per_image_f1": 0.1877,
+        "pooled_f1": 0.1477,
+        "median_mask_pixels": 2537.5
+      },
+      "percent": {
+        "n": 2,
+        "detected_frac": 0.0,
+        "mean_per_image_f1": 0.0,
+        "pooled_f1": 0.0,
+        "median_mask_pixels": 2148.5
+      },
+      "result": {
+        "n": 1,
+        "detected_frac": 0.0,
+        "mean_per_image_f1": 0.0,
+        "pooled_f1": 0.0,
+        "median_mask_pixels": 5085.0
+      }
+    },
+    "by_mask_size": {
+      "small (<= median)": {
+        "n": 30,
+        "detected_frac": 0.4,
+        "mean_per_image_f1": 0.1709,
+        "pooled_f1": 0.1594,
+        "median_mask_pixels": 609.0
+      },
+      "large (> median)": {
+        "n": 30,
+        "detected_frac": 0.4333,
+        "mean_per_image_f1": 0.2427,
+        "pooled_f1": 0.2904,
+        "median_mask_pixels": 3418.5
+      },
+      "median_mask_pixels": 1941.5
+    },
+    "easy_relative_size_change_median": 0.1952
+  },
+  "test": {
+    "by_difficulty": {
+      "easy": {
+        "n": 30,
+        "detected_frac": 0.4667,
+        "mean_per_image_f1": 0.1954,
+        "pooled_f1": 0.2741,
+        "median_mask_pixels": 1309.0
+      },
+      "hard": {
+        "n": 30,
+        "detected_frac": 0.3,
+        "mean_per_image_f1": 0.1266,
+        "pooled_f1": 0.0989,
+        "median_mask_pixels": 1834.0
+      }
+    },
+    "hard_by_imperfection": {
+      "antialias": {
+        "with": {
+          "n": 15,
+          "detected_frac": 0.4,
+          "mean_per_image_f1": 0.1677,
+          "pooled_f1": 0.1528,
+          "median_mask_pixels": 816.0
+        },
+        "without": {
+          "n": 15,
+          "detected_frac": 0.2,
+          "mean_per_image_f1": 0.0855,
+          "pooled_f1": 0.0461,
+          "median_mask_pixels": 1917.0
+        }
+      },
+      "ink_shift": {
+        "with": {
+          "n": 17,
+          "detected_frac": 0.3529,
+          "mean_per_image_f1": 0.1376,
+          "pooled_f1": 0.0953,
+          "median_mask_pixels": 2394.0
+        },
+        "without": {
+          "n": 13,
+          "detected_frac": 0.2308,
+          "mean_per_image_f1": 0.1123,
+          "pooled_f1": 0.1052,
+          "median_mask_pixels": 768.0
+        }
+      },
+      "letter_spacing": {
+        "with": {
+          "n": 12,
+          "detected_frac": 0.3333,
+          "mean_per_image_f1": 0.1438,
+          "pooled_f1": 0.1188,
+          "median_mask_pixels": 2264.5
+        },
+        "without": {
+          "n": 18,
+          "detected_frac": 0.2778,
+          "mean_per_image_f1": 0.1151,
+          "pooled_f1": 0.0839,
+          "median_mask_pixels": 792.0
+        }
+      },
+      "offset": {
+        "with": {
+          "n": 17,
+          "detected_frac": 0.2353,
+          "mean_per_image_f1": 0.1071,
+          "pooled_f1": 0.0873,
+          "median_mask_pixels": 816.0
+        },
+        "without": {
+          "n": 13,
+          "detected_frac": 0.3846,
+          "mean_per_image_f1": 0.152,
+          "pooled_f1": 0.1093,
+          "median_mask_pixels": 2497.0
+        }
+      }
+    },
+    "hard_by_number_of_imperfections": {
+      "1": {
+        "n": 8,
+        "detected_frac": 0.25,
+        "mean_per_image_f1": 0.1151,
+        "pooled_f1": 0.0638,
+        "median_mask_pixels": 1632.5
+      },
+      "2": {
+        "n": 14,
+        "detected_frac": 0.2143,
+        "mean_per_image_f1": 0.0823,
+        "pooled_f1": 0.0743,
+        "median_mask_pixels": 1283.5
+      },
+      "3": {
+        "n": 7,
+        "detected_frac": 0.5714,
+        "mean_per_image_f1": 0.2465,
+        "pooled_f1": 0.1898,
+        "median_mask_pixels": 2261.0
+      },
+      "4": {
+        "n": 1,
+        "detected_frac": 0.0,
+        "mean_per_image_f1": 0.0,
+        "pooled_f1": 0.0,
+        "median_mask_pixels": 3427.0
+      }
+    },
+    "easy_by_mode": {
+      "both": {
+        "n": 7,
+        "detected_frac": 0.5714,
+        "mean_per_image_f1": 0.294,
+        "pooled_f1": 0.3343,
+        "median_mask_pixels": 1920.0
+      },
+      "family": {
+        "n": 9,
+        "detected_frac": 0.4444,
+        "mean_per_image_f1": 0.13,
+        "pooled_f1": 0.1124,
+        "median_mask_pixels": 850.0
+      },
+      "size": {
+        "n": 14,
+        "detected_frac": 0.4286,
+        "mean_per_image_f1": 0.188,
+        "pooled_f1": 0.3269,
+        "median_mask_pixels": 1309.0
+      }
+    },
+    "by_field_kind": {
+      "amount": {
+        "n": 16,
+        "detected_frac": 0.4375,
+        "mean_per_image_f1": 0.2362,
+        "pooled_f1": 0.3077,
+        "median_mask_pixels": 3484.5
+      },
+      "date": {
+        "n": 6,
+        "detected_frac": 0.0,
+        "mean_per_image_f1": 0.0,
+        "pooled_f1": 0.0,
+        "median_mask_pixels": 3868.5
+      },
+      "grade": {
+        "n": 8,
+        "detected_frac": 0.625,
+        "mean_per_image_f1": 0.2296,
+        "pooled_f1": 0.2037,
+        "median_mask_pixels": 458.0
+      },
+      "id": {
+        "n": 3,
+        "detected_frac": 0.6667,
+        "mean_per_image_f1": 0.3144,
+        "pooled_f1": 0.3803,
+        "median_mask_pixels": 2497.0
+      },
+      "int": {
+        "n": 21,
+        "detected_frac": 0.381,
+        "mean_per_image_f1": 0.1404,
+        "pooled_f1": 0.1108,
+        "median_mask_pixels": 609.0
+      },
+      "name": {
+        "n": 5,
+        "detected_frac": 0.0,
+        "mean_per_image_f1": 0.0,
+        "pooled_f1": 0.0,
+        "median_mask_pixels": 3267.0
+      },
+      "result": {
+        "n": 1,
+        "detected_frac": 1.0,
+        "mean_per_image_f1": 0.1502,
+        "pooled_f1": 0.1502,
+        "median_mask_pixels": 6752.0
+      }
+    },
+    "by_mask_size": {
+      "small (<= median)": {
+        "n": 30,
+        "detected_frac": 0.4333,
+        "mean_per_image_f1": 0.1595,
+        "pooled_f1": 0.1279,
+        "median_mask_pixels": 594.0
+      },
+      "large (> median)": {
+        "n": 30,
+        "detected_frac": 0.3333,
+        "mean_per_image_f1": 0.1624,
+        "pooled_f1": 0.213,
+        "median_mask_pixels": 3393.5
+      },
+      "median_mask_pixels": 1632.0
+    },
+    "easy_relative_size_change_median": 0.1667
+  }
+}

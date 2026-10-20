@@ -1,8 +1,9 @@
 # VeriDoc AI: document tampering localization (prototype)
 
-> Status: Phase 3 done. Two U-Net runs were trained on Kaggle and validated locally. Run 2
-> was chosen on validation by a rule fixed before it was trained (`results/final_model.json`).
-> No test-split results exist yet (Phase 4).
+> Status: Phase 4 done. The final model (run 2) was evaluated once on the held-out synthetic
+> test split, with the validation-frozen config: pooled pixel F1 0.537, image AUC 0.696, but
+> **92% of authentic test pages are flagged** at the frozen threshold. A failure analysis and
+> a quick robustness check follow. The local API is Phase 5.
 
 VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
 a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
@@ -358,5 +359,115 @@ How to read it (synthetic data only):
   90% recall.
 - **Overwrites are still mostly missed.** An F1 of 0.25 is well below splices.
 
-See `docs/FONTS.md` for fonts and licenses. Sections on the model results,
-limitations, privacy and deployment are added as later phases complete.
+## Held-out test evaluation (Phase 4)
+
+```bash
+# the single frozen test evaluation (run once; refuses to run without a frozen config)
+.venv/bin/python -m research.evaluate --method model --split test \
+    --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt
+# quick robustness check: same frozen config, test images perturbed post hoc
+for p in jpeg resize blur; do
+  .venv/bin/python -m research.evaluate --method model --split test --perturb $p \
+      --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt
+done
+.venv/bin/python -m research.compare_test                         # -> results/test_robustness.csv
+# failure analysis
+.venv/bin/python -m research.failure_analysis imperfections       # -> results/overwrite_imperfections.json
+.venv/bin/python -m research.failure_analysis regions --split val # -> results/failure_regions_val.json
+.venv/bin/python -m research.failure_analysis examples            # -> results/failure_examples.json + docs/figures/failure_examples.jpg
+```
+
+**Protocol.** The model is run 2, checkpoint epoch 18 (`artifacts/run2/best.pt`). The
+config is `results/frozen_config_run2.json`:
+- pixel threshold 0.88;
+- image score = mean of the top-500 pixel scores;
+- image threshold 0.889.
+
+All three were selected on validation before any test page was scored. `results/test_model.json`
+records the dataset, eval-config and checkpoint hashes, and they match the frozen config.
+The test split was evaluated **once**. No model, threshold or rule was changed afterwards.
+ELA was not run on test.
+
+**Synthetic held-out test split** (180 pages: 60 authentic, 60 splice, 60 text overwrite;
+sources never seen in training or validation). Fictional documents, so this is not evidence
+of real-world performance. 95% bootstrap CIs (1000 resamples of images). Source:
+`results/test_model.json`.
+
+| Metric | All | Splice | Text overwrite | └ easy | └ hard |
+|---|---|---|---|---|---|
+| Pooled pixel F1 | 0.537 [0.452, 0.608] | 0.618 [0.526, 0.697] | 0.187 [0.097, 0.288] | 0.274 [0.119, 0.416] | 0.099 [0.046, 0.179] |
+| Pooled pixel IoU | 0.367 | 0.448 | 0.103 | 0.159 | 0.052 |
+| Per-image pixel F1 (tampered) | 0.377 [0.311, 0.440] | 0.592 | 0.161 [0.104, 0.225] | 0.195 | 0.127 |
+| Image AUC (vs authentic) | 0.696 [0.621, 0.773] | 0.867 [0.790, 0.934] | 0.525 [0.417, 0.629] | 0.512 | 0.537 |
+| Recall at frozen image threshold | 0.942 [0.900, 0.983] | 0.967 | 0.917 | 0.900 | 0.933 |
+| **FPR at frozen image threshold** | **0.917 [0.833, 0.983]** | | | | |
+
+How to read it:
+- **Splices are localised; text overwrites mostly are not.** Overwrite image AUC 0.525 is
+  close to chance.
+- **The image-level operating point does not work.** At the threshold frozen for 90% recall
+  on validation (val FPR 0.75), the test split flags 94% of tampered pages and also **92% of
+  authentic pages**. Every authentic test page has at least one pixel above the pixel
+  threshold. The risk score does not separate authentic from tampered pages well enough to
+  be used as a filter.
+- **High recall overstates localisation.** 36 of the 113 flagged tampered pages have no
+  correctly predicted pixel. Their score came from false positives elsewhere on the page
+  (`results/test_robustness.csv`).
+- **Test compared with validation.** Overall test F1 0.537 is a little below validation
+  0.590, and splice F1 is a little below too (0.618 vs 0.669). Overwrite F1 is lower
+  (0.187 vs 0.254). On validation, hard overwrites (0.276) were above easy ones (0.236);
+  on test hard is below easy (0.099 vs 0.274). The validation CIs overlapped, so that gap
+  was not reliable (see the failure analysis).
+
+**Quick robustness check (core).** Each perturbation is applied alone to the saved test
+images, with the frozen config and no re-selection. Parameters are drawn per page with a
+fixed seed (`configs/robustness.yaml`, all initial assumptions, chosen outside the training
+ranges). This is not the stretch split `test_robust`, which would regenerate the pages with
+harsher processing. Source: `results/test_robustness.csv`.
+
+| Metric | Clean | JPEG q40–60 | Resize ×0.60–0.75 | Blur σ 1.2–1.6 |
+|---|---|---|---|---|
+| Pooled pixel F1, all | 0.537 [0.452, 0.608] | 0.507 [0.426, 0.585] | 0.394 [0.296, 0.478] | 0.330 [0.248, 0.406] |
+| └ splice | 0.618 | 0.581 | 0.567 | 0.499 |
+| └ text overwrite | 0.187 | 0.162 | 0.077 | 0.022 |
+| Image AUC | 0.696 [0.621, 0.773] | 0.658 [0.579, 0.739] | 0.653 [0.577, 0.732] | 0.629 [0.543, 0.711] |
+| Recall / FPR at frozen threshold | 0.942 / 0.917 | 0.908 / 0.883 | 0.933 / 0.933 | 0.983 / 0.950 |
+
+- Splice localisation degrades gradually.
+- Overwrite localisation almost disappears under blur.
+- Blur raises recall only because it raises nearly every page's risk score; the FPR rises
+  too.
+
+**Failure analysis.** Full write-up: `docs/FAILURE_ANALYSIS.md`. Figure:
+`docs/figures/failure_examples.jpg`. 12 test pages were chosen by fixed rules and annotated,
+and every explanation is labelled as a hypothesis. Main points:
+- **False positives on authentic validation pages occur in ordinary text, not in headers or
+  table lines.** Text covers 9% of the page area but holds 86% of the false-positive pixels.
+  Rule lines and solid header bands get less than their share of area
+  (`results/failure_regions_val.json`). In the test examples, untouched numeric table cells
+  are frequent false-positive locations.
+- **Hard overwrites scoring above easy ones on validation was noise.** It reversed on test.
+  The only imperfection associated with detection on both splits is the generator's
+  changed anti-aliasing: hard edits with it are found about twice as often
+  (`results/overwrite_imperfections.json`). That suggests, without proving it, that the
+  model partly detects a rendering artifact of our generator.
+- **Missed edits.**
+  - Clean size-only and font-family-only overwrites are often missed, although a person can
+    see them.
+  - Splices pasted onto blank paper with a matching background are missed.
+  - Splices that cut across table structure are found well.
+  - On validation, 32% of overwrite mask pixels are cover-only: the area where the old
+    value was removed and nothing was redrawn. The model finds 10% of them.
+
+**Limitations.**
+- Synthetic data from one generator, two document types and six font families.
+- The test split shares the generator, fonts and processing ranges with training.
+- Small test groups (30–60 pages), so the CIs are wide.
+- Masks label the intended edit region, not every forensic trace.
+- The risk score is not calibrated, and at the frozen operating point it flags nearly all
+  authentic pages.
+- Unseen-font, unseen-processing and hand-edited sanity tests were **not run** (stretch,
+  skipped).
+
+See `docs/FONTS.md` for fonts and licenses. Sections on serving, privacy and deployment are
+added as later phases complete.

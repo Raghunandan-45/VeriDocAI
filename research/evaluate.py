@@ -121,24 +121,30 @@ def model_info(checkpoint: str, cfg: dict, stride: int | None) -> dict:
             "tile": cfg["tiling"]["tile"], "max_side": cfg["analysis"]["max_side"]}
 
 
-def image_stats(rec: dict, data_root: Path, map_fn, n_bins: int, top_k: int) -> dict:
-    """Score map for one page reduced to histograms + max + top-k mean (small to keep)."""
+def image_stats(rec: dict, data_root: Path, map_fn, n_bins: int, top_k: int, perturbation=None) -> dict:
+    """Score map for one page reduced to histograms + max + top-k mean (small to keep).
+    `perturbation` = (name, robustness config) applies a post-hoc perturbation first."""
     img = load_rgb(data_root / rec["image_path"])
     gt = load_mask(data_root / rec["mask_path"])
+    params = None
+    if perturbation is not None:
+        from research.perturb import perturb
+        img, gt, params = perturb(img, gt, perturbation[0], perturbation[1], rec["sample_id"])
     prob = map_fn(img)
     if prob.shape != gt.shape:
         raise ValueError(f"{rec['sample_id']}: score map {prob.shape} != mask {gt.shape}")
     pos, neg = pixel_hists(prob, gt, n_bins)
     return {"sample_id": rec["sample_id"], "label": int(rec["image_label"]), "pos": pos, "neg": neg,
-            "max": float(prob.max()), "top_k_mean": top_k_mean(prob, top_k)}
+            "max": float(prob.max()), "top_k_mean": top_k_mean(prob, top_k), "perturb_params": params}
 
 
 def _stats_job(args):
     return image_stats(*args)
 
 
-def collect(records, data_root: Path, map_fn, cfg: dict, workers: int) -> list[dict]:
-    jobs = [(r, data_root, map_fn, cfg["thresholds"]["n_bins"], cfg["image_score"]["top_k"]) for r in records]
+def collect(records, data_root: Path, map_fn, cfg: dict, workers: int, perturbation=None) -> list[dict]:
+    jobs = [(r, data_root, map_fn, cfg["thresholds"]["n_bins"], cfg["image_score"]["top_k"], perturbation)
+            for r in records]
     if workers > 0:
         with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn")) as ex:
             return list(ex.map(_stats_job, jobs, chunksize=4))
@@ -258,10 +264,16 @@ def run(argv=None) -> dict:
                     help="val only; default results/frozen_ela.json or results/frozen_config.json (model)")
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--limit", type=int, default=None, help="debug: first N records only")
+    ap.add_argument("--perturb", default=None, choices=["jpeg", "resize", "blur"],
+                    help="robustness check: perturb each page first (needs --frozen-config)")
+    ap.add_argument("--perturb-config", default="configs/robustness.yaml")
     a = ap.parse_args(argv)
 
     cfg = load_config(a.config)
     frozen = json.loads(resolve(a.frozen_config).read_text()) if a.frozen_config else None
+    if a.perturb and frozen is None:
+        raise TestSetGuardError("--perturb is a robustness check of a frozen configuration; "
+                                "it needs --frozen-config and never selects thresholds")
     check_guard(a.split, frozen, a.method, cfg)  # BEFORE any data is touched
     minfo = None
     if a.method == "model":
@@ -279,7 +291,8 @@ def run(argv=None) -> dict:
     else:  # one process; torch uses its own intra-op threads
         map_fn = ModelScoreMap(str(resolve(a.checkpoint)), cfg, minfo["stride"])
         workers = 0
-    stats = collect(records, data_root, map_fn, cfg, workers)
+    pcfg = load_config(a.perturb_config) if a.perturb else None
+    stats = collect(records, data_root, map_fn, cfg, workers, (a.perturb, pcfg) if a.perturb else None)
 
     hash_file = resolve(load_config(cfg["data_config"])["paths"]["hash_file"])
     provenance = {"dataset_sha256": dict(l.split("=", 1) for l in hash_file.read_text().split())["sha256"],
@@ -304,19 +317,28 @@ def run(argv=None) -> dict:
     else:
         result["evidence_class"] = "SYNTHETIC held-out evaluation with a validation-frozen config"
         result["frozen_config"] = frozen
+    if a.perturb:
+        values = [v for st in stats for v in st["perturb_params"].values()]
+        result["evidence_class"] += f"; robustness check: post-hoc perturbation '{a.perturb}', no threshold changes"
+        result["perturbation"] = {"name": a.perturb, "config": pcfg[a.perturb], "seed": pcfg["seed"],
+                                  "config_sha256": sha256_bytes(resolve(a.perturb_config).read_bytes()),
+                                  "param_min": min(values), "param_max": max(values),
+                                  "param_mean": float(np.mean(values))}
     metrics = evaluate(stats, records, frozen, cfg)
     per_image = metrics.pop("per_image")
     result["metrics"] = metrics
-    out = resolve(a.out or f"results/{a.split}_{a.method}.json")
+    out = resolve(a.out or f"results/{a.split}_{a.method}{'_perturb_' + a.perturb if a.perturb else ''}.json")
     out.write_text(json.dumps(_round(result), indent=2))
     meta = {r["sample_id"]: r for r in records}
     with open(out.with_name(out.stem + "_per_image.csv"), "w", newline="") as f:
         cols = ["sample_id", "document_type", "manipulation_type", "difficulty", "splice_size_class"]
-        w = csv.DictWriter(f, fieldnames=cols + [k for k in per_image[0] if k != "sample_id"])
+        pp = {st["sample_id"]: st.get("perturb_params") or {} for st in stats}
+        pcols = sorted({k for v in pp.values() for k in v})
+        w = csv.DictWriter(f, fieldnames=cols + [k for k in per_image[0] if k != "sample_id"] + pcols)
         w.writeheader()
         for row in per_image:
             r = meta[row["sample_id"]]
-            w.writerow({**{c: r.get(c) for c in cols}, **_round(row)})
+            w.writerow({**{c: r.get(c) for c in cols}, **_round(row), **pp[row["sample_id"]]})
     print(f"wrote {out} (+ per-image CSV)")
     return result
 

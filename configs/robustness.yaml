@@ -1,0 +1,20 @@
+# Quick robustness check (Phase 4, core): post-hoc perturbations of the SAVED test images,
+# evaluated with the validation-frozen config. No threshold, rule or model change.
+# This is NOT the stretch split "test_robust", which regenerates sources with harsher
+# processing. Kept out of configs/eval.yaml so that the eval config hash recorded in the
+# frozen config stays unchanged.
+#
+# Every value is an INITIAL ASSUMPTION, chosen to lie outside the training processing ranges:
+# final JPEG 60-95, resize 0.8-1.2, blur p=0.3 with sigma 0.3-1.0.
+# Each perturbation is applied alone. Parameters are drawn per page from
+# rng([seed, perturbation id, crc32(sample_id)]).
+
+seed: 2027
+
+jpeg:
+  quality: [40, 60]        # re-encode the saved JPEG once more (inclusive integer range)
+resize:
+  scale: [0.6, 0.75]       # downscale; image bilinear, mask NEAREST (evaluated at the new size)
+  interp: bilinear
+blur:
+  sigma: [1.2, 1.6]        # Gaussian blur on the image only
