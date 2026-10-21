@@ -1,633 +1,541 @@
-# VeriDoc AI: document tampering localization (prototype)
+# VeriDoc AI: document tamper localization on synthetic data
 
-> Status: Phase 5 done. The final model (run 2) was evaluated once on the held-out synthetic
-> test split, with the validation-frozen config: pooled pixel F1 0.537, image AUC 0.696, but
-> **92% of authentic test pages are flagged** at the frozen threshold. A local FastAPI app
-> (and a CPU Docker image) returns heatmaps and region boxes, never a tampered/authentic verdict.
+> **Status:** all phases complete (research prototype). On the synthetic held-out test split the
+> U-Net localises pasted regions (splices) reasonably well but mostly misses edited text, and
+> its image-level score cannot be used as a filter. The local API therefore returns heatmaps
+> and region boxes, never a tampered/authentic verdict.
 
-VeriDoc AI takes a document image and outputs a pixel-level heatmap of likely edited regions,
-a binary predicted mask, an overlay, and an image-level **risk score** (not a calibrated
-probability). It is a research / portfolio prototype trained and evaluated on **synthetic**
-documents only. It is not a fraud detector, does not detect all forgeries, and cannot prove
-that a document is authentic.
+## What this is
 
-## Planned components
+VeriDoc AI is a **research project on localising edits in document images, trained and
+evaluated on synthetic data only**. Given a page image it produces a pixel-level score
+heatmap, an overlay, boxes around high-score regions and an experimental image-level
+**risk score** (not a calibrated probability).
 
-- Synthetic dataset: Pillow-rendered fictional invoices and marksheets with two manipulation
-  types (text overwrite, region splice), pixel masks and source-level train/val/test splits.
-- Baseline: Error Level Analysis (ELA) anomaly score map with a validation-selected threshold.
-- Model: U-Net with an ImageNet-pretrained ResNet-18 encoder (segmentation_models_pytorch),
-  trained on 256x256 crops on a Kaggle T4 GPU; tiled full-page inference on CPU.
-- Evaluation: thresholds and score rules selected on validation only, frozen, then applied
-  once to the held-out test split, with bootstrap confidence intervals.
-- Serving: FastAPI app sharing the `src/docforge` inference package; Dockerfile.
+It is **not a production verifier**. It was never tested on real documents or real forgeries,
+it does not detect all kinds of edits, and it cannot show that a document is authentic.
 
-## Setup (local, CPU only)
+Every number in the tables below is copied from a file in `results/` (or, for settings,
+`configs/`), and `research/check_readme_numbers.py` checks that they still match. All
+results are **synthetic evaluation, not evidence of real-world performance**.
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest
-```
+**In one paragraph:** the dataset is fictional invoices and marksheets with two edit types,
+text overwrites and splices. Thresholds were selected on validation and frozen, then the
+held-out test split was scored once. The U-Net reaches test pooled pixel F1 0.537 against
+0.023 for an ELA baseline. Splices score 0.618; text overwrites only 0.187. At the frozen
+image threshold, 92% of authentic test pages are flagged.
 
-## Data (Phase 1)
-
-All data is **synthetic**: fictional invoices and marksheets rendered with Pillow. Names are
-random first/last-name combinations, places and organisations are invented, and all amounts,
-dates and IDs are random. Results on this data are synthetic evaluation, not evidence of
-real-world performance.
-
-### Commands
-
-```bash
-# generate the dataset (images, masks, metadata, manifests, dataset hash, counts table, contact sheet)
-.venv/bin/python -m research.gen.build_dataset --config configs/data.yaml
-# run all dataset tests (tiny on-the-fly dataset + the generated data/ dataset)
-.venv/bin/python -m pytest -v
-# verify a regenerated/uploaded copy against the canonical hash (used on Kaggle)
-.venv/bin/python -m research.gen.dataset_hash --data-root data --check results/dataset_manifest_hash.txt
-```
-
-### Pipeline (identical for authentic and tampered pages)
-
-1. Render a clean page, 1240x1754 RGB. Layout, colours, font family and sizes, and row counts vary by seed.
-2. Stage-1 JPEG of the clean page, quality 70-95 (`compression.double: true`).
-3. Tamper, or leave the page untouched for the authentic variant.
-4. Resize by 0.8-1.2 (image bilinear or Lanczos; mask NEAREST, then re-binarised).
-5. Gaussian blur with probability 0.3, sigma 0.3-1.0 (image only).
-6. Final JPEG, quality 60-95. This is the saved image file.
-
-**Why double compression:** with a single JPEG pass after editing, an edited region and the
-rest of the page share one compression history, so Error Level Analysis (the baseline) has
-almost no signal. A stage-1 save of the clean page before editing makes the setting
-realistic (most real documents were compressed before anyone edited them) and gives ELA a
-fair chance. You can switch it off with `compression.double: false`; the choice is recorded in
-every sample's metadata.
-
-### Manipulations
-
-- **Text overwrite** (one per source): pick an editable value field (amount, quantity, date,
-  name, ID, marks, grade, result, percentage). Cover it with the local background (robust
-  median colour of a 4 px ring plus matching noise), then draw a new value at the same anchor.
-  - **Easy:** different font family and/or a size change of at least 12%.
-  - **Hard:** same family, size within ±1 px, plus a random non-empty subset of: sub-pixel or
-    1-2 px offset, ink colour shift (4-10 grey levels), different anti-aliasing (supersampled or
-    aliased rendering), and letter spacing.
-  - Easy/hard is assigned by seed, exactly 50/50 within each split × document type.
-- **Splice** (one per source): paste a rectangular patch from a donor document of the **same
-  split** and same document type at a random location. Two size classes, 50/50 within each
-  split × document type (recorded as `splice_size_class`):
-  - **Block:** 100-420 × 40-220 px, containing ink.
-  - **Field:** 1-3 text lines starting at a donor text field.
-
-  The patch colour is shifted by the paper-colour difference (target − donor), plus a uniform
-  residual of ±2 grey levels per channel, so the donor's paper tint doesn't give the edit away.
-
-### Masks: definition and limitation
-
-Single-channel PNG (0/255), same size as the image.
-- Authentic: all zeros.
-- Text overwrite: union of the cover rectangle and the new text's ink box.
-- Splice: the pasted rectangle.
-
-The mask is the **intended edit region**, not the full forensic trace. JPEG ringing, blur
-halos and resampling effects that spill outside these rectangles are not labelled. Areas
-inside the rectangles that look unchanged (for example blank paper inside a cover box) are
-still labelled positive.
-
-### Splits and leakage control
-
-- Split by **source document** before generating anything: 70/15/15, stratified by document type.
-  That gives 140/30/30 sources per type, so 280/60/60 sources and 840/180/180 samples overall.
-- All variants of a source stay in one split.
-- Splice donors come from the same split.
-- Training crops come only from the train split (the sampler refuses other splits).
-  - "Text-dense" crops are judged on text strokes: dark pixels minus solid fills found by a 9×9
-    morphological opening. Dark header bands therefore cannot make a crop text-dense on their own.
-- Val/test are evaluated on full pages.
-
-### Fonts
-
-Six families from **only two font designs** (DejaVu and Liberation) are used for train, val and
-test. Lato and Ubuntu are held out for the stretch `test_unseen` split, so that experiment
-measures transfer to an **unseen font design**, not just an unseen font file. All font files
-are copied into `assets/fonts/` (sha256 values and licenses are in `docs/FONTS.md`).
-Amounts are written `Rs. 12,345.00` because Liberation has no ₹ glyph.
-
-### Files and metadata
+## Architecture
 
 ```
-data/generated/{train,val,test}/<source_id>_<variant>_<k>.jpg | _mask.png | .json
-data/manifests/{train,val,test}.jsonl     # one metadata record per line
-data/manifests/dataset_info.json          # config, counts, library versions
+configs/data.yaml ──► research/gen (Pillow renderer, tamperer, post-processing)
+                         │  data/generated/{train,val,test}/*.jpg|_mask.png|.json
+                         │  data/manifests/*.jsonl, results/dataset_manifest_hash.txt
+                         ▼
+research/sampler.py ──► research/train.py (256×256 crops; GPU: Kaggle T4) ──► artifacts/run2/best.pt
+                                                                                 │
+src/docforge  (shared: preprocess, tiled inference, ELA, thresholds, metrics, analyze)
+   ▲                    ▲                                                        │
+   │                    │                                                        ▼
+research/evaluate.py: select on val ─► results/frozen_*.json ─► one frozen test run ─► results/test_*.json
+   │
+serving/app.py (FastAPI) ─► GET /health, POST /v1/analyze, upload page ─► Dockerfile (CPU)
 ```
 
-Metadata fields:
-- Identity: `sample_id`, `source_id`, `document_type`, `split`, `condition`, `image_path` / `mask_path` (relative to `data/`).
-- Labels: `image_label`, `manipulation_type`, `difficulty`, `bbox_xyxy` (final image coordinates, exclusive x1/y1).
-- Reproducibility: `seed` and `seed_key`, `generator_version`, `software` (Pillow, FreeType, libjpeg-turbo, numpy and OpenCV versions).
-- Fonts: `font_family` (body) and `header_font_family`.
-- Processing: both JPEG qualities, resize scale and interpolation, blur sigma.
-- Splices: `donor_source_id`, `donor_box_xyxy`.
-- `edit`: old/new value, fonts, sizes, imperfections, cover and text boxes in render coordinates.
+- **`src/docforge`** is used by both the evaluation and the API, so the tiling, thresholding
+  and scoring are the same code in both places. A test checks that the API's risk score for a
+  real validation page equals the score the evaluation recorded.
+- **`research/`** holds data generation, training, evaluation, failure analysis, latency and
+  checks.
+- **`serving/`** holds the API, the upload checks, the fixed limitations text and the static
+  upload page.
 
-### Reproducibility and Kaggle
+## Dataset and how it is generated
 
-Every random draw uses `np.random.default_rng([seed, *purpose_key])`, so output does not
-depend on worker count or order. `results/dataset_manifest_hash.txt` holds one sha256 over
-all manifest records and **decoded** image and mask pixels, plus counts and library versions.
-The locally generated dataset is **canonical**. On Kaggle you can either:
-- (a) regenerate with the pinned Pillow and check the hash, or
-- (b) upload the local `data/` folder as a Kaggle dataset.
+Fictional documents rendered with Pillow: invoices and marksheets, 1240×1754 before resizing.
+Names, organisations, places, amounts, dates and IDs are random and invented. The generator
+version is `1.2.0` (`configs/data.yaml`), and the global seed is `20261016`. One sha256
+(`results/dataset_manifest_hash.txt`) covers all manifest records and the **decoded** image
+and mask pixels:
+`ed41f4f37c3f2cb0ce53b9f8da60670952c213acf2f48520f7adad40adf5ad1c`.
 
-If the hash differs, the check exits with an error that says to use (b).
+Each source document gives three samples: authentic, text overwrite and splice. Counts
+(`results/dataset_counts.csv`, `results/dataset_manifest_hash.txt`):
 
-### Known generator artifacts (synthetic-data limitations)
+<!-- check:dataset -->
+| Split | Samples | Authentic | Splice (block / field) | Text overwrite (easy / hard) |
+|---|---|---|---|---|
+| train | 840 | 280 | 140 / 140 | 140 / 140 |
+| val | 180 | 60 | 30 / 30 | 30 / 30 |
+| test | 180 | 60 | 30 / 30 | 30 / 30 |
+| **total** | 1200 | 400 | 200 / 200 | 200 / 200 |
 
-- Splice patches are tint-matched only in mean colour. The donor's noise level and JPEG
-  history still differ, which is intended forensic signal.
-- Every splice patch meets an ink floor (blocks ≥ 0.05, fields ≥ 0.03 dark-pixel fraction), so no
-  patch is near-blank paper. Sparse patches near the floor can still be subtle, and the whole
-  rectangle is labelled positive.
-- Edited values are not kept arithmetically consistent: totals no longer add up after an edit.
-  The model only sees pixels, so this is not a usable cue, but it is unrealistic.
-- Only two document types and a few layouts per type. Paper is uniform colour plus Gaussian
-  noise, with no scanner or photo effects beyond resize, blur and JPEG.
+**Processing**, identical for authentic and tampered pages:
+1. Render.
+2. Stage-1 JPEG of the clean page (quality 70–95).
+3. Edit, or leave untouched.
+4. Resize ×0.8–1.2 (the mask uses nearest-neighbour).
+5. Gaussian blur with probability 0.3.
+6. Final JPEG (quality 60–95).
 
-## Baseline and evaluation harness (Phase 2)
+The stage-1 JPEG before editing gives ELA a fair chance: with one JPEG pass after the edit,
+edited and untouched pixels share one compression history.
 
-```bash
-# ELA on validation: selects + freezes thresholds -> results/val_ela.json, results/frozen_ela.json
-.venv/bin/python -m research.evaluate --method ela --split val
-# test splits are refused unless a validation-frozen config is given (Phase 4)
-.venv/bin/python -m research.evaluate --method ela --split test --frozen-config results/frozen_ela.json
-```
+**Edits:**
+- **Text overwrite:** cover an existing value with the local background and draw a new value.
+  - *Easy:* a different font family and/or a size change of at least 12%.
+  - *Hard:* same family and similar size, plus small imperfections: offset, ink-colour shift,
+    changed anti-aliasing, letter spacing.
+  - Easy and hard are split 50/50 by seed.
+- **Splice:** paste a rectangle from a donor document of the **same split** and type.
+  - *Block* or *field* sized, 50/50.
+  - The paper tint is matched in mean colour.
 
-**ELA anomaly score map (not a probability).**
-1. Re-save the image as JPEG at quality 90 and take the absolute per-channel difference.
-2. Take the max over the three channels.
-3. Apply a Gaussian blur with sigma 2.
-4. Score = clip(diff / 10, 0, 1).
+**Masks** mark the **intended edit region**: for a text overwrite, the cover rectangle plus
+the new text box; for a splice, the pasted rectangle. JPEG ringing or blur halos outside the
+rectangles are not labelled. Blank paper inside a cover rectangle is labelled positive.
 
-The normalisation constant 10 is **fixed** (set from the maximum smoothed difference on 24
-train pages, which was 9.5). It is not per-image min-max, which would stretch an authentic
-page's noise to full range. ELA runs at native resolution because resampling destroys the
-JPEG block grid.
+Known generator artifacts:
+- Totals no longer add up after an edit.
+- There are only two document types and two font designs: six families from DejaVu and
+  Liberation. Lato and Ubuntu are reserved for an unseen-font test that was not run.
+- Paper is flat colour plus noise, with no scanner or camera effects.
 
-**Shared inference code (`src/docforge`).**
-- Tiled inference: tile 256, stride 128, reflect padding, 2-D Hann blending with a 0.01 floor,
-  long side capped at 2000 px.
-- Binned thresholds (1000 bins).
-- Metrics and bootstrap CIs.
+Fonts and licences: `docs/FONTS.md`.
 
-The serving API in Phase 5 will reuse the same code.
+## Splits and leakage controls
 
-**Protocol (validation only).**
-1. One global pixel threshold maximising pooled pixel F1.
-2. An image-score rule (max / mean of top 500 / fraction above the pixel threshold), chosen by ROC-AUC.
-3. An image threshold reaching 90% recall on tampered validation pages.
+- **Split by source document before anything is generated:** 70/15/15, stratified by document
+  type, fixed seed. All three variants of a source stay in one split.
+- **Splice donors come from the same split** as the target, so no test pixels appear in
+  training pages.
+- **Training crops come only from the train split.** The crop sampler refuses other splits.
+  Validation and test are evaluated on full pages.
+- **Thresholds and score rules are selected on validation only and frozen in a JSON file.**
+  `research/evaluate.py` refuses any `test*` split without a frozen config, and refuses frozen
+  files that were not selected on `val` or that do not match the checkpoint, stride and
+  settings.
+- **The test split was scored once per method.** That is one U-Net run and one ELA run, plus
+  the post-hoc robustness perturbations under the same frozen config. Nothing was changed
+  afterwards.
+- Tests in `tests/test_splits.py` check source isolation, same-split donors, easy/hard and
+  splice-class balance, and deterministic split sizes. They run on a freshly generated tiny
+  dataset and on `data/`.
 
-All three are frozen in a JSON file. `research/evaluate.py` refuses any split named `test*`
-without such a file, and refuses files not selected on `val`.
+## Models
 
-**ELA on validation (SYNTHETIC data; thresholds selected on the same data, so optimistic).**
-Source: `results/val_ela.json`. 180 pages (120 tampered, 60 authentic); 95% bootstrap CIs over 1000 resamples.
+### ELA baseline
 
-| Metric | Value |
-|---|---|
-| Image ROC-AUC (rule `max`) | 0.507 [0.426, 0.597] |
-| Pooled pixel F1 at pixel threshold 0.144 | 0.020 [0.015, 0.026] |
-| Per-image pixel F1 (tampered pages) | 0.031 [0.023, 0.039] |
-| Validation recall / FPR at the frozen image threshold | 0.90 / 0.87 |
+Error Level Analysis, reported as an **anomaly score map**, not a probability:
+1. Re-save at JPEG quality 90.
+2. Take the absolute difference, then the max over channels.
+3. Gaussian blur, sigma 2.
+4. Divide by a **fixed** constant of 10, set from train-page maxima, and clip to [0, 1].
 
-**ELA is at chance level on this dataset** (validation image AUC 0.507, CI includes 0.5).
+The pixel threshold, the image-score rule and the image threshold were all selected on
+validation.
 
-What explains it, according to `results/ela_diagnostic.json` (40 train sources, the same edits
-regenerated in memory, oracle threshold, no CIs):
+ELA is at chance level here. A diagnostic on train pages (`results/ela_diagnostic.json`,
+oracle threshold, no CIs) shows that removing resize and blur barely helps:
 
-| Post-processing variant | Image AUC (max) | Oracle pooled pixel F1 |
+<!-- check:ela_diag -->
+| ELA post-processing variant (train pages) | Image AUC (max rule) | Oracle pooled pixel F1 |
 |---|---|---|
-| standard (resize + blur + final JPEG) | 0.513 | 0.035 |
+| standard pipeline | 0.513 | 0.035 |
 | no resize, no blur | 0.557 | 0.043 |
 | no resize, no blur, single JPEG | 0.529 | 0.032 |
 
-Removing the resize and blur that follow the edit helps only slightly. **ELA is weak even
-without them**, so resampling is not the main reason. Hypothesis, not established: ELA
-responds mainly to high-contrast text edges, which cover the whole page, so edited text looks
-like any other text. Synthetic data only.
+*Hypothesis, not established:* ELA responds mainly to high-contrast text edges, which cover
+the whole page, so edited text looks like any other text.
 
-## Model and training (Phase 3)
+### U-Net
 
-- **Model:** `smp.Unet("resnet18", encoder_weights="imagenet", in_channels=3, classes=1)` with ImageNet normalisation.
-- **Loss:** BCE + soft Dice (weights 1 + 1).
-- **Optimiser:** AdamW (lr 3e-4, weight decay 1e-4) with a cosine schedule. AMP is on when running on GPU.
-- **Batching:** 16 crops of 256×256 per step, built from **page visits**. Each data item decodes one train page and
-  cuts 4 crops from it, so JPEG decoding is shared across crops. A tampered page is visited with
-  probability 0.75 and each crop on it is positive with probability 2/3. This keeps the crop rules:
-  50% positive crops, and half of the negatives from authentic pages.
-- **Epoch:** 1600 page visits, i.e. 6400 crops.
-- **Validation and checkpoints:**
-  - After each epoch, validate on a fixed subset of 36 full validation pages at stride 256.
-  - Keep the best checkpoint by pooled pixel F1 on that subset.
-  - At the end, validate the best checkpoint on all validation pages at stride 128.
-- These are starting guesses, not tuned values.
-- Training runs on a Kaggle T4 (see `docs/KAGGLE.md` and `research/kaggle_run.py`); inference works on CPU.
+- **Architecture:** `smp.Unet("resnet18", encoder_weights="imagenet", in_channels=3, classes=1)`
+  with ImageNet normalisation.
+- **Loss and optimiser:** BCE + Dice, AdamW, cosine schedule, AMP on GPU.
+- **Training data:** 256×256 native-resolution crops, half of them containing an edit;
+  negatives come mostly from text-dense areas. There are no flips (they would corrupt text).
+- **Inference:** tiles of 256 at stride 128 with reflect padding, Hann-window blending, long
+  side capped at 2000 px. This runs on CPU.
+- **Validation choices:**
+  - one global pixel threshold maximising pooled pixel F1;
+  - image score = the score rule with the best validation AUC (mean of the top-500 pixel
+    scores);
+  - image threshold = the one reaching 90% recall on validation tampered pages.
 
-```bash
-.venv/bin/python -m research.train --smoke --allow-cpu --encoder-weights none   # CPU overfit check
-python -m research.train --data-root <data> --output-dir <out> [--resume] [--batch-size N] [--no-amp]
-.venv/bin/python -m research.verify_artifacts --dir artifacts                  # after copying Kaggle outputs
-.venv/bin/python -m research.evaluate --method model --checkpoint artifacts/best.pt --split val
-```
+### Run 1 → run 2: one pre-registered retrain
 
-**CPU smoke test** (`results/smoke_cpu/smoke_losses.json`): random-init encoder, 8 fixed crops,
-20 steps at lr 1e-3. Loss went from 1.418 to 0.359; mean of the first 5 steps 1.178, mean of
-the last 5 steps 0.403. This only shows the training loop can fit data; it is not a result.
+Run 1 found splices but almost no text overwrites. A diagnosis using only training and
+validation data explained why (`results/diag_overwrite_*.json`):
 
-### Training run (Kaggle T4)
-
-The run was done remotely by the author. Its logs are in `results/kaggle_run/`, and the
-sha256 of every downloaded file was re-checked locally (`results/artifacts_verification.json`).
-- Data: the Kaggle copy passed the dataset hash check (`ed41f4f3…`, 840/180/180).
-- Setup: 10 epochs, batch 16, AMP, ImageNet encoder.
-- Speed: about 81–85 s per epoch.
-- Losses: training loss fell from 1.097 to 0.423. Val-subset pooled F1 (36 pages, stride 256)
-  went from 0.040 to a best of 0.502 at **epoch 8**, then 0.466 at epoch 10.
-- `best.pt` is the epoch-8 checkpoint. It loads and runs on CPU (about 23.5 s for one 1906×1348
-  page at stride 128).
-
-### U-Net run 1 (baseline) vs ELA on validation
-
-**Synthetic data. Thresholds and score rules were selected on these same validation pages, so
-every number here is optimistic.** The frozen held-out test results come in Phase 4.
-Sources: `results/val_model.json`, `results/val_ela.json`, `results/val_comparison.csv`,
-`results/frozen_config.json`. 180 pages (120 tampered, 60 authentic), 95% bootstrap CIs.
-
-| Metric | ELA | U-Net run 1 (epoch 8) |
+<!-- check:diag -->
+| Finding behind the retrain (no test data used) | Value | Source |
 |---|---|---|
-| Pixel threshold (val-selected) | 0.144 | 0.867 |
-| Pooled pixel F1 | 0.020 [0.015, 0.026] | 0.602 [0.521, 0.668] |
-| Pooled pixel IoU | 0.010 | 0.431 |
-| Per-image pixel F1 (tampered pages) | 0.031 [0.024, 0.039] | 0.304 [0.235, 0.369] |
-| Image score rule (val-selected) | max | mean of top 500 |
-| Image ROC-AUC | 0.507 [0.426, 0.597] | 0.704 [0.628, 0.775] |
-| Val recall / FPR at the frozen image threshold (90% recall target) | 0.90 / 0.87 | 0.90 / 0.77 [0.67, 0.87] |
+| Text overwrites: share of positive training crops | 49% | `diag_overwrite_crops.json` |
+| Text overwrites: share of positive training pixels | 11% | `diag_overwrite_crops.json` |
+| Text overwrites: share of tampered pixels in the checkpoint-selection subset | 8.5% | `diag_overwrite_context.json` |
+| Sampled TRAINING overwrite pages with any detected pixel | 5 of 30 | `diag_overwrite_preds.json` |
+| Median max score inside missed val overwrite masks | 0.010 | `diag_overwrite_preds.json` |
 
-The pixel scores and the image risk score are model scores, **not calibrated probabilities**.
+Run 2 was the **single approved retrain: per-crop Dice + stratified selection + 20 epochs**
+(`configs/train_run2.yaml`). Three settings changed together, so any difference is the
+effect of the combination, not of one change.
 
-**Breakdown for U-Net run 1.** Each tampered group is scored against all 60 authentic pages for AUC.
+The decision rule was fixed **before** run 2 was trained: keep the run with the higher
+full-validation macro pooled F1, the mean of splice F1 and overwrite F1. Results were to be
+reported either way. Run logs: `results/kaggle_run/`, `results/kaggle_run2/`; decision:
+`results/final_model.json`.
 
-| Tampered group | n | Pooled pixel F1 | Per-image F1 | Image AUC |
-|---|---|---|---|---|
-| Splice (all) | 60 | 0.667 [0.587, 0.739] | 0.583 | 0.922 |
-| Splice, block | 30 | 0.666 | 0.598 | 0.955 |
-| Splice, field | 30 | 0.670 | 0.568 | 0.888 |
-| Text overwrite (all) | 60 | 0.068 [0.000, 0.142] | 0.024 | 0.486 [0.380, 0.593] |
-| Text overwrite, easy | 30 | 0.112 | 0.049 | 0.556 |
-| Text overwrite, hard | 30 | 0.000 | 0.000 | 0.417 |
+<!-- check:runs -->
+| Run | Training change | Epochs | Best epoch | Median s / epoch (`T4` GPU) | Val macro pooled F1 (decision metric) |
+|---|---|---|---|---|---|
+| `run1` (baseline) | batch Dice, random val subset, pooled-F1 selection | 10 | 8 | 82 | 0.368 |
+| **`run2` (final)** | **per-crop Dice + stratified selection + more epochs** | 20 | 18 | 97 | 0.461 |
 
-What this shows, on synthetic data only:
-- **Splices are localised well.** Pooled F1 is about 0.67 and image AUC 0.92.
-- **Text overwrites are essentially not detected.** Hard overwrites (same font, ±1 px size) get
-  F1 0.000, and the overwrite AUC is at chance. The overall image AUC of 0.70 mixes
-  these two very different behaviours.
-- **The image-level operating point is not useful yet.** At 90% validation recall, 77% of
-  authentic pages are flagged, because the model gives some high pixel scores on untouched
-  pages: 37% of authentic pages have at least one pixel above the pixel threshold
-  (`authentic_pages` in `results/val_model.json`).
+Validation numbers (`results/val_ela.json`, `results/val_model.json`,
+`results/val_model_run2.json`, `results/final_model.json`, `results/val_comparison.csv`).
+**Thresholds were selected on these same pages, so these numbers are optimistic.**
 
-### Text-overwrite diagnosis and run 2
-
-Run 1 above is the **baseline**. The diagnosis used no GPU and no test data
-(`research/diagnose_overwrite.py`; files `results/diag_overwrite_*.json`).
-- **Missed even on training pages.** Overwrites are missed on 25 of 30 sampled training pages
-  too, so the model underfits them.
-- **Crops are balanced, pixels are not.** Overwrites make up 49% of positive training crops but
-  only 11% of positive pixels. The Dice loss was computed over the whole batch, so they got
-  little weight.
-- **The selection metric could not see them.** The per-epoch selection subset was 92% splice
-  pixels by tampered area.
-- **Scores inside missed edits are near zero** (median maximum 0.010 on validation).
-
-**Run 2** is the single approved retrain: **per-crop Dice + stratified selection + 20 epochs**
-(`configs/train_run2.yaml`). Three settings change at once, so any difference from run 1 is
-the effect of the combination, not of one change alone.
-
-Decision rule, fixed before training, validation only: the final model is the run with the
-higher full-validation macro pooled F1, the mean of splice F1 and overwrite F1 at that run's
-frozen threshold. For run 1 that is (0.667 + 0.068) / 2 = 0.368. Results were to be reported
-whether or not run 2 helped.
-
-**Run 2 result.** Training: 20 epochs at about 97 s each, logs in `results/kaggle_run2/`, file
-hashes verified in `results/artifacts_verification_run2.json`. The best checkpoint is epoch 18,
-selected by val-subset macro F1.
-
-**Synthetic validation; thresholds selected on these same pages, so optimistic.** Source:
-`results/val_comparison.csv` (from `results/val_ela.json`, `results/val_model.json`,
-`results/val_model_run2.json`). 95% bootstrap CIs.
-
-| Metric | ELA | Run 1 (baseline) | Run 2 |
+<!-- check:val_models -->
+| Metric (validation; thresholds selected on these pages) | ELA | U-Net `run1` | U-Net `run2` |
 |---|---|---|---|
-| Pixel threshold (val-selected) | 0.144 | 0.867 | 0.880 |
-| **Macro pooled F1 (decision metric)** | 0.028 | 0.368 | **0.461** |
+| Pixel threshold (selected on val) | 0.144 | 0.867 | 0.880 |
+| **Macro pooled F1 (pre-registered decision metric)** | **0.028** | **0.368** | **0.461** |
 | Pooled pixel F1, splice | 0.043 | 0.667 [0.587, 0.739] | 0.669 [0.574, 0.743] |
 | Pooled pixel F1, text overwrite | 0.013 | 0.068 [0.000, 0.142] | 0.254 [0.155, 0.353] |
-| └ easy | 0.013 | 0.112 | 0.236 [0.117, 0.383] |
-| └ hard | 0.013 | 0.000 | 0.276 [0.135, 0.417] |
-| Pooled pixel F1, all pages | 0.020 | 0.602 [0.521, 0.668] | 0.590 [0.505, 0.659] |
-| Per-image pixel F1 (tampered pages) | 0.031 | 0.304 [0.235, 0.369] | 0.382 [0.322, 0.445] |
-| Image AUC (val-selected rule: ELA max, U-Net runs mean of top 500) | 0.507 | 0.704 [0.628, 0.775] | 0.725 [0.652, 0.793] |
-| Image AUC, splice vs authentic | 0.503 | 0.922 [0.858, 0.971] | 0.855 [0.773, 0.918] |
-| Image AUC, overwrite vs authentic | 0.510 | 0.486 [0.380, 0.593] | 0.594 [0.492, 0.691] |
-| Val FPR at the frozen 90%-recall image threshold | 0.87 | 0.77 [0.67, 0.87] | 0.75 [0.63, 0.85] |
-| Authentic pages with any pixel above the pixel threshold | 0.97 | 0.37 | **0.88** |
+| └ easy | 0.012 | 0.112 | 0.236 |
+| └ hard | 0.013 | 0.000 | 0.276 |
+| Pooled pixel F1, all pages | 0.020 | 0.602 [0.521, 0.668] | 0.591 [0.505, 0.659] |
+| Image AUC (selected score rule) | 0.507 | 0.704 [0.628, 0.775] | 0.725 [0.652, 0.792] |
+| FPR at the frozen 90%-recall image threshold | 0.87 | 0.77 | 0.75 |
+| Authentic pages with any pixel above the pixel threshold | 0.97 | 0.37 | 0.88 |
 
-**Decision (`research/select_final.py` → `results/final_model.json`):** run 2 has the higher
-macro pooled F1 (0.461 vs 0.368), so **run 2 is the final model**. Phase 4 uses
-`results/frozen_config_run2.json`.
+Run 2 won the pre-registered rule and is the final model:
+- **What improved:** text-overwrite F1 rose and splice F1 held.
+- **What it cost:** more authentic pages carry at least one high-score pixel.
 
-How to read it (synthetic data only):
-- **Combined effect, not one change.** Run 2 (**per-crop Dice + stratified selection + 20 epochs**)
-  improved text-overwrite localisation: pooled F1 rose from 0.068 to 0.254, and hard overwrites
-  rose from 0.000 to 0.276. The CIs of the two runs do not overlap for overwrites. Three
-  settings changed at once, so this cannot be attributed to any single one.
-- **Splice localisation is unchanged** (0.667 vs 0.669).
-- **Costs.** Run 2 marks at least one pixel above the threshold on 88% of authentic pages,
-  against 37% for run 1. Its splice image AUC is lower (0.855 vs 0.922). The image-level
-  operating point is still poor for both runs: about 75% of authentic pages are flagged at
-  90% recall.
-- **Overwrites are still mostly missed.** An F1 of 0.25 is well below splices.
+## Test results (held-out synthetic test split, frozen config, one run)
 
-## Held-out test evaluation (Phase 4)
+- **Model:** run 2, checkpoint epoch 18, sha256 `4fdae75a…`.
+- **Frozen config:** `results/frozen_config_run2.json`: pixel threshold 0.88, image score =
+  mean of the top-500 pixel scores, image threshold selected for 90% validation recall.
+- **Provenance:** `results/test_model.json` and `results/test_ela.json` record the dataset,
+  config and checkpoint hashes; all match the frozen files.
+- **Uncertainty:** 95% bootstrap CIs over 1000 image resamples.
 
-```bash
-# the single frozen test evaluation (run once; refuses to run without a frozen config)
-.venv/bin/python -m research.evaluate --method model --split test \
-    --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt
-# quick robustness check: same frozen config, test images perturbed post hoc
-for p in jpeg resize blur; do
-  .venv/bin/python -m research.evaluate --method model --split test --perturb $p \
-      --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt
-done
-.venv/bin/python -m research.compare_test                         # -> results/test_robustness.csv
-# failure analysis
-.venv/bin/python -m research.failure_analysis imperfections       # -> results/overwrite_imperfections.json
-.venv/bin/python -m research.failure_analysis regions --split val # -> results/failure_regions_val.json
-.venv/bin/python -m research.failure_analysis examples            # -> results/failure_examples.json + docs/figures/failure_examples.jpg
-```
+**ELA vs U-Net, all test pages** (`results/test_ela.json`, `results/test_model.json`; also in
+`results/test_comparison.csv`):
 
-**Protocol.** The model is run 2, checkpoint epoch 18 (`artifacts/run2/best.pt`). The
-config is `results/frozen_config_run2.json`:
-- pixel threshold 0.88;
-- image score = mean of the top-500 pixel scores;
-- image threshold 0.889.
-
-All three were selected on validation before any test page was scored. `results/test_model.json`
-records the dataset, eval-config and checkpoint hashes, and they match the frozen config.
-The test split was evaluated **once**. No model, threshold or rule was changed afterwards.
-The ELA baseline was also evaluated once on test (at the start of Phase 5), with its own
-validation-frozen config `results/frozen_ela.json` (pixel threshold 0.144, rule max,
-image threshold 0.316) → `results/test_ela.json`.
-
-**Synthetic held-out test split** (180 pages: 60 authentic, 60 splice, 60 text overwrite;
-sources never seen in training or validation). Fictional documents, so this is not evidence
-of real-world performance. 95% bootstrap CIs (1000 resamples of images). Source:
-`results/test_model.json`.
-
-| Metric | All | Splice | Text overwrite | └ easy | └ hard |
-|---|---|---|---|---|---|
-| Pooled pixel F1 | 0.537 [0.452, 0.608] | 0.618 [0.526, 0.697] | 0.187 [0.097, 0.288] | 0.274 [0.119, 0.416] | 0.099 [0.046, 0.179] |
-| Pooled pixel IoU | 0.367 | 0.448 | 0.103 | 0.159 | 0.052 |
-| Per-image pixel F1 (tampered) | 0.377 [0.311, 0.440] | 0.592 | 0.161 [0.104, 0.225] | 0.195 | 0.127 |
-| Image AUC (vs authentic) | 0.696 [0.621, 0.773] | 0.867 [0.790, 0.934] | 0.525 [0.417, 0.629] | 0.512 | 0.537 |
-| Recall at frozen image threshold | 0.942 [0.900, 0.983] | 0.967 | 0.917 | 0.900 | 0.933 |
-| **FPR at frozen image threshold** | **0.917 [0.833, 0.983]** | | | | |
-
-**ELA baseline vs U-Net on the same test split** (each with its own validation-frozen
-config, one run each; synthetic data). Source: `results/test_comparison.csv`, from
-`results/test_ela.json` and `results/test_model.json`.
-
-| Metric (test) | ELA | U-Net (run 2) |
+<!-- check:test_overall -->
+| Metric (test split, one frozen run each) | ELA | U-Net `run2` |
 |---|---|---|
-| Pooled pixel F1, all | 0.023 [0.017, 0.030] | 0.537 [0.452, 0.608] |
-| Pooled pixel F1, splice | 0.053 | 0.618 |
-| Pooled pixel F1, text overwrite | 0.011 | 0.187 |
-| Per-image pixel F1 (tampered) | 0.035 | 0.377 |
+| Pages (tampered / authentic) | 120 / 60 | 120 / 60 |
+| Frozen pixel threshold | 0.144 | 0.880 |
+| **Pooled pixel F1** | 0.023 [0.017, 0.030] | 0.537 [0.452, 0.608] |
+| Pooled pixel IoU | 0.012 | 0.367 |
+| Per-image pixel F1 (tampered pages) | 0.035 [0.027, 0.045] | 0.377 [0.311, 0.440] |
 | Image AUC | 0.484 [0.394, 0.578] | 0.696 [0.621, 0.773] |
-| Recall / FPR at frozen image threshold | 0.950 / 0.850 | 0.942 / 0.917 |
+| Recall at the frozen image threshold | 0.950 [0.908, 0.983] | 0.942 [0.900, 0.983] |
+| **FPR at the frozen image threshold** | 0.850 [0.767, 0.933] | 0.917 [0.833, 0.983] |
+| Authentic pages with any predicted pixel | 0.98 | 1.00 |
 
-ELA stays at chance level on test (AUC 0.484), as on validation (0.507). Both methods flag
-most authentic pages at their frozen thresholds.
+**Per manipulation type and document type** (each tampered group is scored against all 60
+authentic test pages for AUC):
 
-How to read it:
-- **Splices are localised; text overwrites mostly are not.** Overwrite image AUC 0.525 is
-  close to chance.
-- **The image-level operating point does not work.** At the threshold frozen for 90% recall
-  on validation (val FPR 0.75), the test split flags 94% of tampered pages and also **92% of
-  authentic pages**. Every authentic test page has at least one pixel above the pixel
-  threshold. The risk score does not separate authentic from tampered pages well enough to
-  be used as a filter.
-- **High recall overstates localisation.** 36 of the 113 flagged tampered pages have no
-  correctly predicted pixel. Their score came from false positives elsewhere on the page
-  (`results/test_robustness.csv`).
-- **Test compared with validation.** Overall test F1 0.537 is a little below validation
-  0.590, and splice F1 is a little below too (0.618 vs 0.669). Overwrite F1 is lower
-  (0.187 vs 0.254). On validation, hard overwrites (0.276) were above easy ones (0.236);
-  on test hard is below easy (0.099 vs 0.274). The validation CIs overlapped, so that gap
-  was not reliable (see the failure analysis).
+<!-- check:test_groups -->
+| Tampered group (test) | n | U-Net pooled F1 | U-Net per-image F1 | U-Net image AUC | U-Net recall at frozen threshold | ELA pooled F1 |
+|---|---|---|---|---|---|---|
+| Splice | 60 | 0.618 [0.526, 0.697] | 0.592 | 0.867 [0.790, 0.934] | 0.967 | 0.053 |
+| └ block | 30 | 0.603 [0.501, 0.702] | 0.608 | 0.903 [0.807, 0.977] | 0.967 | 0.072 |
+| └ field | 30 | 0.674 [0.581, 0.753] | 0.576 | 0.831 [0.709, 0.931] | 0.967 | 0.028 |
+| Text overwrite | 60 | 0.187 [0.097, 0.288] | 0.161 | 0.525 [0.417, 0.629] | 0.917 | 0.011 |
+| └ easy | 30 | 0.274 [0.119, 0.416] | 0.195 | 0.512 [0.374, 0.634] | 0.900 | 0.009 |
+| └ hard | 30 | 0.099 [0.046, 0.179] | 0.127 | 0.537 [0.416, 0.660] | 0.933 | 0.013 |
+| Invoices (both types) | 60 | 0.600 [0.487, 0.686] | 0.391 | 0.667 [0.558, 0.768] | 0.900 | 0.043 |
+| Marksheets (both types) | 60 | 0.548 [0.417, 0.662] | 0.362 | 0.725 [0.628, 0.817] | 0.983 | 0.025 |
 
-**Quick robustness check (core).** Each perturbation is applied alone to the saved test
-images, with the frozen config and no re-selection. Parameters are drawn per page with a
-fixed seed (`configs/robustness.yaml`, all initial assumptions, chosen outside the training
-ranges). This is not the stretch split `test_robust`, which would regenerate the pages with
-harsher processing. Source: `results/test_robustness.csv`.
+**Robustness check.** Each perturbation is applied alone to the saved test images, with
+parameters drawn per page from a fixed seed (`configs/robustness.yaml`, chosen outside the
+training ranges). The frozen config is used unchanged. Sources:
+`results/test_model_perturb_*.json` and `results/test_robustness.csv`.
 
-| Metric | Clean | JPEG q40–60 | Resize ×0.60–0.75 | Blur σ 1.2–1.6 |
+<!-- check:robustness -->
+| Metric (test, frozen config) | Clean | JPEG re-encode, quality 40–60 | Downscale ×0.60–0.75 | Blur σ 1.2–1.6 |
 |---|---|---|---|---|
 | Pooled pixel F1, all | 0.537 [0.452, 0.608] | 0.507 [0.426, 0.585] | 0.394 [0.296, 0.478] | 0.330 [0.248, 0.406] |
 | └ splice | 0.618 | 0.581 | 0.567 | 0.499 |
 | └ text overwrite | 0.187 | 0.162 | 0.077 | 0.022 |
 | Image AUC | 0.696 [0.621, 0.773] | 0.658 [0.579, 0.739] | 0.653 [0.577, 0.732] | 0.629 [0.543, 0.711] |
-| Recall / FPR at frozen threshold | 0.942 / 0.917 | 0.908 / 0.883 | 0.933 / 0.933 | 0.983 / 0.950 |
+| Recall / FPR at the frozen image threshold | 0.942 / 0.917 | 0.908 / 0.883 | 0.933 / 0.933 | 0.983 / 0.950 |
+| Flagged tampered pages with no correct pixel | 36 of 113 | 43 of 109 | 42 of 112 | 49 of 118 |
 
-- Splice localisation degrades gradually.
-- Overwrite localisation almost disappears under blur.
-- Blur raises recall only because it raises nearly every page's risk score; the FPR rises
-  too.
+How to read the test results:
+- **Splices are localised; text overwrites mostly are not.** The overwrite image AUC is close
+  to 0.5.
+- **The image-level score does not work as a filter.** At the threshold frozen for 90%
+  validation recall, 92% of authentic test pages are flagged.
+- **High recall overstates localisation.** Many flagged tampered pages have no correctly
+  predicted pixel: their score came from false positives elsewhere on the page.
+- **Blur removes most of the overwrite signal.** Splices degrade gradually.
 
-**Failure analysis.** Full write-up: `docs/FAILURE_ANALYSIS.md`. Figure:
-`docs/figures/failure_examples.jpg`. 12 test pages were chosen by fixed rules and annotated,
-and every explanation is labelled as a hypothesis. Main points:
-- **False positives on authentic validation pages occur in ordinary text, not in headers or
-  table lines.** Text covers 9% of the page area but holds 86% of the false-positive pixels.
-  Rule lines and solid header bands get less than their share of area
-  (`results/failure_regions_val.json`). In the test examples, untouched numeric table cells
-  are frequent false-positive locations.
-- **Hard overwrites scoring above easy ones on validation was noise.** It reversed on test.
-  The only imperfection associated with detection on both splits is the generator's
-  changed anti-aliasing: hard edits with it are found about twice as often
-  (`results/overwrite_imperfections.json`). That suggests, without proving it, that the
-  model partly detects a rendering artifact of our generator.
-- **Missed edits.**
-  - Clean size-only and font-family-only overwrites are often missed, although a person can
-    see them.
-  - Splices pasted onto blank paper with a matching background are missed.
-  - Splices that cut across table structure are found well.
-  - On validation, 32% of overwrite mask pixels are cover-only: the area where the old
-    value was removed and nothing was redrawn. The model finds 10% of them.
+## Failure analysis (summary)
 
-**Limitations.**
-- Synthetic data from one generator, two document types and six font families.
-- The test split shares the generator, fonts and processing ranges with training.
-- Small test groups (30–60 pages), so the CIs are wide.
-- Masks label the intended edit region, not every forensic trace.
-- The risk score is not calibrated, and at the frozen operating point it flags nearly all
-  authentic pages.
-- Unseen-font, unseen-processing and hand-edited sanity tests were **not run** (stretch,
-  skipped).
+Full write-up with 12 annotated test examples: `docs/FAILURE_ANALYSIS.md`. Figure:
+`docs/figures/failure_examples.jpg`. All explanations there are labelled hypotheses.
 
-## Local API (Phase 5)
+**Where false positives fall** on authentic **validation** pages
+(`results/failure_regions_val.json`; the region classes come from a simple pixel-colour
+rule). The answer is ordinary text, not headers or table lines:
+
+<!-- check:fp_regions -->
+| Region class (authentic val pages) | Share of false-positive pixels | Share of page area | Lift (FP share / area share) |
+|---|---|---|---|
+| text | 86.2% | 8.8% | 9.81 |
+| blank paper | 11.6% | 80.8% | 0.14 |
+| table / rule lines | 1.6% | 5.7% | 0.28 |
+| solid fill (header bands, shaded cells) | 0.6% | 4.8% | 0.13 |
+| header zone (`top 15%` of the page) | 10.8% |  |  |
+
+**Hard vs easy overwrites.** On validation, hard overwrites scored slightly above easy ones.
+That reversed on test, and the validation CIs overlap almost completely, so the gap was
+noise (`results/overwrite_imperfections.json`, `results/val_model_run2.json`,
+`results/test_model.json`):
+
+<!-- check:easy_hard -->
+| Split | Overwrite difficulty | n | Pages with any correct pixel | Pooled pixel F1 [95% CI] |
+|---|---|---|---|---|
+| val | easy | 30 | 0.40 | 0.236 [0.117, 0.383] |
+| val | hard | 30 | 0.43 | 0.276 [0.135, 0.417] |
+| test | easy | 30 | 0.47 | 0.274 [0.119, 0.416] |
+| test | hard | 30 | 0.30 | 0.099 [0.046, 0.179] |
+
+**Which generator imperfections go with detection.** Fraction of hard overwrite pages with any
+correctly predicted pixel (`results/overwrite_imperfections.json`). Imperfections overlap on
+the same pages, the groups are small and there are no CIs:
+
+<!-- check:imperfections -->
+| Hard overwrites | val: with | val: without | test: with | test: without |
+|---|---|---|---|---|
+| changed anti-aliasing | 0.58 (n 19) | 0.18 (n 11) | 0.40 (n 15) | 0.20 (n 15) |
+| ink colour shift | 0.52 (n 21) | 0.22 (n 9) | 0.35 (n 17) | 0.23 (n 13) |
+| letter spacing | 0.29 (n 17) | 0.62 (n 13) | 0.33 (n 12) | 0.28 (n 18) |
+| small offset | 0.47 (n 17) | 0.38 (n 13) | 0.24 (n 17) | 0.38 (n 13) |
+
+Only the changed anti-aliasing goes with detection on both splits. *Hypothesis:* the model
+partly detects a rendering artifact of this generator, which would not transfer to real edits.
+
+Other patterns (hypotheses, from the annotated examples):
+- Untouched numeric table cells attract false positives.
+- Clean size-only or font-family-only overwrites are missed although a person can see them.
+- Splices on blank paper with matching background are missed; splices that cut across table
+  structure are found.
+
+## Limitations
+
+- **Synthetic data only.** It comes from one generator, with two document types and two font
+  designs. The test split shares the generator, fonts and processing ranges with training.
+  **No real documents or real forgeries were tested.**
+- **Text overwrites are weak:** test pooled F1 0.187, image AUC close to chance. Hard
+  overwrites score lower still, and detection may rely on generator rendering artifacts.
+- **Blur sensitivity:** after Gaussian blur, overwrite F1 drops close to zero.
+- **The image-level score is unusable as a filter:** at the frozen operating point the test
+  FPR is 0.917 (92% of authentic pages flagged). The score is not calibrated.
+- **Small evaluation:** 180 test pages (groups of 30–60), so the CIs are wide. There is one
+  training seed per run, and only one retrain was done.
+- **Masks label the intended edit region**, not every forensic trace.
+- **Not run (stretch items, skipped):** the unseen-font split, the unseen-processing split
+  (`test_robust`), a hand-edited sanity set and OCR.
+
+## The API
+
+`serving/app.py` (FastAPI) exposes:
+- `GET /health`;
+- `POST /v1/analyze` (multipart field `file`, JPEG or PNG);
+- a static upload page at `/`.
+
+**It deliberately returns no tampered/authentic verdict, no risk tier and no image
+threshold**, because of the test FPR above. It returns:
+- a score heatmap (PNG) and an overlay (JPEG) as base64, downscaled for display;
+- boxes of the connected regions at or above the frozen pixel threshold, in original pixels,
+  with area and peak/mean score;
+- the risk score, labelled `"experimental"`, with a note that it is not a probability and not
+  a screening filter;
+- a fixed `limitations` text (`serving/limitations.py`). A test checks every number in it
+  against `results/test_model.json` and `results/test_model_perturb_blur.json`.
+
+**Upload checks** (`serving/validation.py`; limits in `configs/serve.yaml` are initial
+assumptions; tested in `tests/test_serving.py`):
+
+<!-- check:inputs -->
+| Upload check (`serving/validation.py`) | Limit (`configs/serve.yaml`) | Response |
+|---|---|---|
+| file or request body too large | 10 MiB | 413 |
+| not a JPEG/PNG (judged from the bytes) | JPEG, PNG | 415 |
+| decoded size, read from the header before decoding | side ≤ 8000 px, ≤ 40 MP, side ≥ 32 px | `422` |
+| truncated or corrupt image data | full decode must succeed | `400` |
+| checkpoint missing or `sha256` ≠ frozen config | checked at startup | `503` |
+
+**Privacy notes:**
+- **Uploads stay in memory.** Starlette spools multipart files over 1 MB to a temp file by
+  default; the app raises that limit above the upload limit, and a test fails if an upload
+  touches disk.
+- **Nothing is stored.** No database, no files, no caching (`Cache-Control: no-store`).
+- **Logs** hold a request id, byte size, image size, region count and time, never file names
+  or image content (tested).
+- **No network at serve time.** The model is built with `encoder_weights=None` and the
+  trained weights are loaded from a local file (tested with downloads blocked; the container
+  check runs with `--network none`).
+- **Not handled:** EXIF orientation is not applied (as in the evaluation). There is no
+  authentication or rate limiting, so this is a **local** tool, not a public service.
+
+## How to run
+
+**Environment and tests** (Python 3.10, CPU):
 
 ```bash
-# run locally (CPU); the checkpoint is gitignored, see "Getting the checkpoint" below
+python3 -m venv .venv
+.venv/bin/pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m research.gen.build_dataset --config configs/data.yaml   # data/ (about 1200 files x 3)
+.venv/bin/python -m pytest -q
+.venv/bin/python -m research.check_readme_numbers                           # README tables vs results/
+```
+
+**API locally.** The checkpoint `artifacts/run2/best.pt` is gitignored:
+
+```bash
 VERIDOC_CHECKPOINT=artifacts/run2/best.pt PYTHONPATH=src:. .venv/bin/uvicorn serving.app:app --port 8000
-# open http://127.0.0.1:8000/ for the upload page, or:
+# http://127.0.0.1:8000/  (upload page)
 curl -F "file=@page.jpg;type=image/jpeg" http://127.0.0.1:8000/v1/analyze
-curl http://127.0.0.1:8000/health
-.venv/bin/python -m pytest -q tests/test_serving.py
 ```
 
-**What it returns, and what it deliberately does not.** Phase 4 showed that the image-level
-operating point flags 92% of authentic test pages. So `POST /v1/analyze` returns **no
-tampered/authentic verdict, no risk tier and no image threshold**. It returns:
-- a pixel score heatmap (PNG) and an overlay (JPEG), both base64, downscaled to at most
-  1600 px on the long side;
-- bounding boxes of the connected regions at or above the frozen pixel threshold (0.88), in
-  original image pixels, with area and peak/mean score;
-- the risk score (mean of the top-500 pixel scores), labelled `"experimental"`, with a note
-  that it is not a calibrated probability and not a screening filter;
-- a fixed `limitations` text (`serving/limitations.py`). It says the model was evaluated on
-  synthetic data only, localises splices much better than text overwrites (test F1 0.62 vs
-  0.19), is sensitive to blur (F1 0.54 → 0.33), and that the image score flagged 92% of
-  authentic test pages. A test checks every number in it against `results/test_model.json`
-  and `results/test_model_perturb_blur.json`.
-
-**Same code as the evaluation.** The app calls `docforge.model.predict_page` (tiling, Hann
-blending, 2000 px cap) and `docforge.scoring.binarize`, with the pixel threshold and score
-rule read from `results/frozen_config_run2.json`. A test runs a real validation page through
-the serving path and checks that the risk score equals the one the evaluation recorded
-(`tests/test_serving.py::test_serving_score_matches_evaluation_on_a_real_page`).
-
-**Input checks** (`serving/validation.py`, limits in `configs/serve.yaml`, all initial
-assumptions):
-
-| Check | Response |
-|---|---|
-| Body or file over 10 MB (Content-Length or streamed) | 413 |
-| Not JPEG/PNG, judged from the bytes, not the file name or MIME type | 415 |
-| Side over 8000 px, over 40 MP, or under 32 px, read from the header before decoding | 422 |
-| Truncated or corrupt image data | 400 |
-| Checkpoint missing, or its sha256 differs from the frozen config | 503 on `/health` and `/v1/analyze` |
-
-**Privacy.**
-- Uploads stay in memory. Starlette normally spools multipart files over 1 MB to a temp file,
-  so the app raises that limit above the body limit; a test fails if a 2 MB upload touches disk.
-- Nothing is stored.
-- Logs record a request id, byte size, image size, region count and time. They never record
-  file names or content; a test checks this.
-- Responses carry `Cache-Control: no-store`.
-- EXIF orientation is not applied (as in the evaluation), so rotated phone photos are
-  analysed as stored.
-
-**Offline serving.** The model is built with `encoder_weights=None` and the trained weights are
-loaded from the local checkpoint, so no download happens at serve time. A test blocks the
-download functions while loading. The Docker check runs the container with `--network none`.
-
-### Latency and the stride trade-off
-
-```bash
-.venv/bin/python -m research.latency      # -> results/latency_cpu.json
-for st in 256 192; do .venv/bin/python -m research.evaluate --method model --split val --stride $st \
-  --stride-study --frozen-config results/frozen_config_run2.json --checkpoint artifacts/run2/best.pt \
-  --out results/val_model_run2_stride$st.json; done
-```
-
-**Setup.**
-- **Hardware:** Intel Core i5-1335U laptop CPU (12 logical CPUs, torch using 6 threads),
-  7.6 GiB RAM, WSL2, torch 2.14.1+cpu, no GPU.
-- **Pages:** 20 validation pages, 996–1452 px wide and 1409–2054 px high (median 2.16 MP);
-  3 were downscaled to the 2000 px analysis cap.
-- **Method:** each page's JPEG goes through the whole API path (upload parsing, validation,
-  decode, tiled inference with tile 256, regions, image encoding) in-process, with no
-  network; 2 warm-up requests per stride. Source: `results/latency_cpu.json`.
-- **Caveat:** the stride-128 run overlapped Docker Desktop starting up and other unrelated
-  containers on the machine. Its maximum (38.2 s) is probably inflated; the p50 is less
-  affected.
-
-**Accuracy cost**, on **validation only**. The stride-128 thresholds frozen on validation
-were applied unchanged at the larger strides; the test split was not used. Sources:
-`results/val_model_run2.json`, `results/val_model_run2_stride192.json`,
-`results/val_model_run2_stride256.json`. Synthetic data.
-
-| Stride | Request p50 / p95 (s) | Pooled pixel F1 (val) [95% CI] | Splice F1 | Overwrite F1 | Image AUC | FPR at frozen threshold | Authentic pages with any predicted pixel |
-|---|---|---|---|---|---|---|---|
-| **128 (evaluated on test; default)** | 15.7 / 22.1 | 0.591 [0.505, 0.659] | 0.669 | 0.254 | 0.725 | 0.75 | 0.88 |
-| 192 | 7.4 / 11.0 | 0.558 [0.482, 0.621] | 0.646 | 0.211 | 0.695 | 0.88 | 0.97 |
-| 256 | 4.5 / 6.9 | 0.463 [0.388, 0.529] | 0.587 | 0.167 | 0.685 | 0.97 | 1.00 |
-
-- **Stride 192** is about 2× faster for a small F1 loss whose CIs overlap.
-- **Stride 256** (no tile overlap) is about 3.5× faster but loses 0.13 pooled F1, and it marks
-  pixels on every authentic validation page. A hypothesis, not tested: without overlap,
-  pixels near tile edges are predicted from one tile only, with less context.
-- **The served default stays at 128,** the only stride evaluated on test. `VERIDOC_STRIDE`
-  can change it, and `/health` then reports the stride next to
-  `stride_used_in_test_evaluation`.
-- The frozen thresholds were not re-selected for the larger strides, so these rows show the
-  cost of changing only the stride.
-
-### Docker (CPU-only)
+**Docker (CPU-only image, no checkpoint inside):**
 
 ```bash
 docker build -t veridoc-api:0.5 .
-docker run --rm -p 8000:8000 \
-  -v "$PWD/artifacts/run2/best.pt:/models/best.pt:ro" \
-  -e VERIDOC_CHECKPOINT=/models/best.pt veridoc-api:0.5
-.venv/bin/python -m research.docker_check     # -> results/docker_verification.json
+# a) mount the checkpoint read-only
+docker run --rm -p 8000:8000 -v "$PWD/artifacts/run2/best.pt:/models/best.pt:ro" veridoc-api:0.5
+# b) or fetch it from private storage first and check its sha256 before mounting
+#    (the URL comes from your own secret store; never commit it)
+curl -fL "$VERIDOC_MODEL_URL" -o best.pt
+echo "4fdae75a79754102787fe037aa22bd623954ae3eeb93eef800028a3f4fd119d4  best.pt" | sha256sum -c -
+docker run --rm -p 8000:8000 -v "$PWD/best.pt:/models/best.pt:ro" veridoc-api:0.5
+# verify a built image (offline run, health, analysis, rejections)
+.venv/bin/python -m research.docker_check          # -> results/docker_verification.json
 ```
 
-The image has these properties:
-- Base `python:3.10-slim` with `torch==2.14.1+cpu` from the PyTorch CPU index, so it holds no
-  CUDA libraries. scikit-learn, pandas and matplotlib are left out (`requirements-serve.txt`).
-- It runs as a non-root user and has a `HEALTHCHECK` on `/health`.
-- It contains **no checkpoint and no data**.
+At startup the app compares the checkpoint's sha256 with `results/frozen_config_run2.json`
+and refuses to serve on a mismatch (`/health` returns 503). The frozen thresholds only apply
+to that exact checkpoint.
 
-Built and run on this machine (Docker 29.3.1 in WSL2). `results/docker_verification.json`
-records:
-- image size 380 MB (compressed content);
-- `torch 2.14.1+cpu`, CUDA not available;
-- with `--network none`: network unreachable inside the container, `/health` 200, analysis
-  of a validation splice page 200 (predicted box [41, 1206, 232, 1286]; ground truth
-  [39, 1209, 234, 1287]), a non-image file 415, an 11 MB upload 413.
+<!-- check:docker -->
+| Docker check (`--network none`, checkpoint mounted read-only) | Result |
+|---|---|
+| image size (compressed content, MB) | 380 |
+| torch in image / CUDA available | `2.14.1+cpu False` |
+| network inside the container | unreachable: gaierror |
+| `GET /health` | 200 |
+| `POST /v1/analyze` (validation splice page) | 200, 2 regions |
+| largest predicted box `[x0, y0, x1, y1]` | [41, 1206, 232, 1286] |
+| non-image upload | 415 |
+| oversized upload (announced body over the limit) | 413 |
 
-### Getting the checkpoint into the container
+## Latency (CPU)
 
-`artifacts/run2/best.pt` (57 MB, sha256 `4fdae75a…`) is gitignored and is **not** copied
-into the image (`.dockerignore` excludes `artifacts/`). In every setup the app checks the
-file's sha256 against `results/frozen_config_run2.json` at startup, and refuses to serve on
-a mismatch, because the frozen thresholds only apply to that exact checkpoint.
-- **Local runs:** bind-mount the file read-only (`-v .../best.pt:/models/best.pt:ro`) and
-  point `VERIDOC_CHECKPOINT` at it, as above. The weights never enter an image layer, and
-  you can swap the file without rebuilding.
-- **Later deployment:** keep the weights out of git and out of public images. Two options:
-  1. Build a **private** image that adds the file in a final layer (for example
-     `FROM veridoc-api:0.5` plus `COPY best.pt /models/best.pt`). Push it only to a private
-     registry, and record the sha256 in the deployment config. This is immutable and simple.
-  2. Keep the public, model-free image and have the platform provide the file at startup:
-     a read-only volume, or a download from private object storage by an init step using
-     the platform's secret store. Never put the link or credentials in the repo.
+Every request goes through the full API path in-process (upload parsing, checks, decode,
+tiled inference, regions, image encoding), with no network. Source: `results/latency_cpu.json`
+(`.venv/bin/python -m research.latency`).
 
-  In both cases the startup sha256 check is the integrity gate. A new model means a new
-  frozen config from validation, never a reused threshold.
+An **earlier latency run (Phase 5) was contaminated**: it overlapped Docker Desktop starting up
+and other containers on the machine. It was **replaced** by a re-measurement on an otherwise
+idle machine (Docker Desktop and all containers stopped), which is what the tables show.
 
-See `docs/FONTS.md` for fonts and licenses.
+<!-- check:latency_setup -->
+| Latency setup | Value |
+|---|---|
+| CPU / torch | `13th Gen Intel(R) Core(TM) i5-1335U` / `2.14.1+cpu` |
+| Logical CPUs / torch threads | 12 / 6 |
+| RAM (GiB) | 7.6 |
+| Pages timed (validation) / warm-up requests per stride | 20 / 2 |
+| Page width / height range (px) | 996–1452 / 1409–2054 |
+| Median page size (megapixels) | 2.16 |
+| Pages downscaled to the analysis cap | 3 (cap 2000 px long side) |
+
+**Stride trade-off.** Latency comes from the run above. The F1 columns are measured on
+**validation only**: the stride-128 frozen thresholds were applied unchanged at the larger
+strides with `research/evaluate.py --stride-study`, which is refused on test splits. Sources:
+`results/val_model_run2.json`, `results/val_model_run2_stride192.json`,
+`results/val_model_run2_stride256.json`.
+
+<!-- check:latency -->
+| Stride | Request median / `p95` (s) | Val pooled pixel F1 | Val splice F1 | Val overwrite F1 | Val FPR at frozen threshold | Authentic val pages with any predicted pixel |
+|---|---|---|---|---|---|---|
+| **128** (default; used on test) | 14.6 / 20.4 | 0.591 [0.505, 0.659] | 0.669 | 0.254 | 0.75 | 0.88 |
+| 192 | 7.3 / 9.6 | 0.558 [0.482, 0.621] | 0.646 | 0.211 | 0.88 | 0.97 |
+| 256 | 4.2 / 5.6 | 0.463 [0.388, 0.529] | 0.587 | 0.167 | 0.97 | 1.00 |
+
+- **Default stride 128:** the API serves at 128, the only stride evaluated on test.
+  `VERIDOC_STRIDE` changes it, and `/health` reports the stride in use next to the test stride.
+- **Stride 192:** roughly halves the time at a small validation F1 cost with overlapping CIs.
+- **Stride 256** (no tile overlap): loses more F1 and marks pixels on every authentic
+  validation page.
+
+## Deployment (optional)
+
+This is a local research tool. **Latency on any hosted machine was not measured**; the
+numbers above are from one laptop CPU. If you do run it elsewhere:
+- **Image:** push `veridoc-api:0.5` to a registry (`docker tag` / `docker push`). The image
+  contains no weights, so it can live in any registry you are allowed to use.
+- **Model weights:** provide them at runtime as a read-only volume or an init-step download
+  from private storage, with the sha256 check above. Alternatively, build a **private**
+  image that adds `best.pt` in a final layer and push it only to a private registry.
+- **Host:** any x86-64 CPU host with Docker. Allow at least several seconds per page, run one
+  worker per container (torch already uses several threads), and size memory for the page
+  score map.
+- **Network:** put authentication, TLS and rate limiting in front of it. The app has none, and
+  uploads are document images.
+- **Retraining:** a retrained model needs a new frozen config from validation, never a reused
+  threshold.
+
+## Reproducibility
+
+- **Data:** `research.gen.build_dataset` is deterministic. Every random draw uses
+  `np.random.default_rng([seed, *purpose_key])`, so output does not depend on worker count.
+  Pillow, numpy and OpenCV are pinned (`requirements.txt`; full freeze in
+  `requirements-lock.txt`) because the dataset hash depends on their rendering, JPEG and
+  resize behaviour. Check a copy with
+  `.venv/bin/python -m research.gen.dataset_hash --data-root data --check results/dataset_manifest_hash.txt`.
+- **Training (GPU):** `research/train.py` is the source of truth. It supports
+  `--config configs/train_run2.yaml --data-root <data> --output-dir <out>`, `--resume`,
+  `--batch-size` and `--no-amp`, and it checkpoints every epoch. A CPU smoke test is
+  `--smoke --allow-cpu --encoder-weights none`.
+- **Remote GPU workflow (generic):** training ran on a hosted notebook GPU (an NVIDIA T4).
+  `research/kaggle_run.py` holds the notebook cells:
+  1. environment check;
+  2. get the repo onto the machine (git clone or an uploaded archive);
+  3. regenerate or upload the data and verify the dataset hash;
+  4. smoke run, then full training;
+  5. print the sha256 of every output.
+
+  `docs/KAGGLE.md` lists the steps and the files to download. Kernel links, URLs and tokens
+  are never stored in the repo; the code reads them from untracked files (`.env`,
+  `configs/local.yaml`). After download, `research.verify_artifacts` re-checks the sha256
+  values and loads the checkpoint on CPU.
+- **Evaluation:**
+  1. `research.evaluate --split val` selects and freezes;
+  2. `research.select_final` applies the pre-registered run rule;
+  3. `research.evaluate --split test --frozen-config …` scores the test split once;
+  4. `research.compare_test` and `research.failure_analysis` build the tables and the
+     failure analysis.
+
+## Repository layout
+
+```
+configs/      data, train (run 1, run 2), eval, robustness, serve (all defaults = initial assumptions)
+research/     gen/ (dataset), sampler, train, evaluate, perturb, failure_analysis, latency, checks
+src/docforge/ shared inference: preprocess, tiling, model, ELA, scoring, analyze
+serving/      FastAPI app, upload validation, limitations text, static page
+tests/        pytest suite (data, splits, crops, tiling, scoring, model, run 2, perturbations, serving)
+results/      every reported number (JSON/CSV); large images are gitignored
+docs/         FONTS.md, KAGGLE.md, FAILURE_ANALYSIS.md, INTERVIEW_NOTES.md, figures/
+```
